@@ -1,4 +1,5 @@
 use std::fmt::Display;
+use crate::runtime::Manager;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum UnOp {
@@ -34,19 +35,7 @@ pub struct Insert {                    // insert {id: 1, ..}
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct Entry {
-    pub name: String, // column name         id
-    pub val: Expr, // value to be inserted    1
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct Record {
-    pub val: Vec<Expr>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum Expr {
-    /// Basic Lambda Core expressions
+pub enum Value {
     Number {
         val: i32,
     },
@@ -56,10 +45,23 @@ pub enum Expr {
     String {
         val: String,
     },
+    Closure {
+        params: Vec<String>,
+        body: Box<Expr>,
+        env: Vec<(String, Value)>,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum Expr {
+    /// Basic Lambda Core expressions
+    Literal {
+        val: Value,
+    },
     Variable {
         ident: String,
     },
-    Vector {
+    Tuple {
         val: Vec<Expr>
     },
     KeyVal {
@@ -86,7 +88,7 @@ pub enum Expr {
         params: Vec<String>,
         body: Box<Expr>,
     },
-    FuncApply {
+    Call {
         func: Box<Expr>,
         args: Vec<Expr>,
     },
@@ -117,7 +119,9 @@ pub enum Expr {
          */
     },
     Fold {
-        args: Vec<Expr>
+        table_column: Box<Expr>,
+        operation: Box<Expr>,
+        identity: Box<Expr>,
     }
 }
 
@@ -184,7 +188,7 @@ pub enum ReplCmd {
 
 impl Default for Expr {
     fn default() -> Self {
-        Expr::Number { val: 0 }
+        Expr::Literal { val: Value::Number { val: 0 } }
     }
 }
 
@@ -213,13 +217,23 @@ impl Display for BinOp {
     }
 }
 
+impl Display for Value {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Value::Number { val } => write!(f, "{}", val),
+            Value::Bool { val } => write!(f, "{}", val),
+            Value::String { val } => write!(f, "\"{}\"", val),
+            Value::Closure { params, body, env } =>
+                write!(f, "fn({})[{:?}]{{{}}}", params.join(","), env, body),
+        }
+    }
+}
+
 impl Display for Expr {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Expr::Number { val } => write!(f, "{}", val),
-            Expr::Bool { val } => write!(f, "{}", val),
-            Expr::String { val } => write!(f, "{}", val),
-            Expr::Vector { val } => write!(f, "vector"),
+            Expr::Literal { val } => write!(f, "{}", val),
+            Expr::Tuple { val } => write!(f, "vector"),
             Expr::KeyVal { key, value } => write!(f, "keyval: {}, {}", key, value),
             Expr::Variable { ident } => write!(f, "{}", ident),
             Expr::Unop { op, expr } => write!(f, "{}{}", op, expr),
@@ -228,7 +242,7 @@ impl Display for Expr {
                 write!(f, "if {} then {} else {}", cond, expr1, expr2)
             }
             Expr::Func { params, body } => write!(f, "fn({})[{}]", params.join(","), body),
-            Expr::FuncApply { func, args } =>
+            Expr::Call { func, args } =>
                 write!(
                     f,
                     "{}({})",
@@ -252,7 +266,7 @@ impl Display for Expr {
                     }
                     write!(f, "{{")?;
                     match record {
-                        Expr::Vector { val } => {
+                        Expr::Tuple { val } => {
                             for (j, entry) in val.iter().enumerate() {
                                 if j > 0 {
                                 write!(f, ", ")?;

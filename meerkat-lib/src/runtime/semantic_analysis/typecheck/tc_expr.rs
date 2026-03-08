@@ -11,7 +11,7 @@ impl TypecheckEnv {
             Expr::Bool { val: _ } => Bool,
             Expr::String {val: _} => String,
             Expr::KeyVal { key, value } => self.infer_expr(&value),
-            Expr::Vector { val } => {
+            Expr::Tuple { val } => {
                 let mut type_vec = Vec::new();
                 for el in val {
                     type_vec.push(self.infer_expr(el));
@@ -141,7 +141,7 @@ impl TypecheckEnv {
                 Fun(param_types, Box::new(ret_typ))
             }
 
-            Expr::FuncApply { func, args } => {
+            Expr::Call { func, args } => {
                 let func_typ = self.infer_expr(func);
                 if let Type::Fun(arg_typs, ret_typ) = func_typ {
                     if arg_typs.len() != args.len() {

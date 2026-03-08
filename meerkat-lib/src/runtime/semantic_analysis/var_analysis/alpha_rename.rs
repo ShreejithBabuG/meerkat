@@ -20,7 +20,7 @@ impl Expr {
             Expr::KeyVal { value , .. } => {
                 value.alpha_rename(var_binded, renames);
             }
-            Expr::Vector { val } => {
+            Expr::Tuple { val } => {
                 for item in val {
                     item.alpha_rename(var_binded, renames);
                 }
@@ -42,7 +42,7 @@ impl Expr {
                 new_binds.extend(params.iter().cloned());
                 body.alpha_rename(&new_binds, renames);
             }
-            Expr::FuncApply { func, args } => {
+            Expr::Call { func, args } => {
                 func.alpha_rename(var_binded, renames);
                 for arg in args {
                     arg.alpha_rename(var_binded, renames);

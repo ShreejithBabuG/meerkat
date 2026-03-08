@@ -89,7 +89,7 @@ impl ChangeState {
             info!("change being applied: {}", &change.from_name);
 
             if let Some(Expr::Table { records, .. }) = self.arg_to_values.get_mut(&change.from_name) {
-                if let Expr::Vector { .. } = &change.new_val {
+                if let Expr::Tuple { .. } = &change.new_val {
                     records.push(change.new_val.clone());                // update table val if record is inserted
                 } else {
                     self.arg_to_values.insert(change.from_name.clone(), change.new_val.clone()); 

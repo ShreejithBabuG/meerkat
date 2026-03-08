@@ -14,7 +14,7 @@ impl Evaluator {
     pub fn fold(&mut self, vals: &Vec<Expr>, identity: Expr, operation: &Expr) -> Expr {
         let mut result = identity;
         for val in vals {
-            let mut func_apply = Expr::FuncApply { func: Box::new(operation.clone()), args: vec![result, val.clone()] };
+            let mut func_apply = Expr::Call { func: Box::new(operation.clone()), args: vec![result, val.clone()] };
             self.eval_expr(&mut func_apply);
             result = func_apply;
         }
@@ -35,7 +35,7 @@ impl Evaluator {
             Expr::Number { val } => {}
             Expr::Bool { val } => {}
             Expr::String {val} => {}
-            Expr::Vector { val } => {
+            Expr::Tuple { val } => {
                 for expr in val {
                     self.subst(expr, var_to_expr);
                 }
@@ -90,7 +90,7 @@ impl Evaluator {
                 
             }
 
-            Expr::FuncApply { func, args } => {
+            Expr::Call { func, args } => {
                 self.subst(func, var_to_expr);
                 for arg in args {
                     self.subst(arg, var_to_expr);

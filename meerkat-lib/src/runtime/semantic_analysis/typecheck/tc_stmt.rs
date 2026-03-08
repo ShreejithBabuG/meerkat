@@ -52,7 +52,7 @@ impl TypecheckEnv {
                 match &table_type {
                     Type::Table(schema) => {
                         match &insert.row {
-                            Expr::Vector { val: keyvals } => {
+                            Expr::Tuple { val: keyvals } => {
                                 if keyvals.len()!= schema.len() {
                                     panic!("Entries in the row do not match the table {} schema", insert.table_name);
                                 }

@@ -1,5 +1,5 @@
 use crate::ast::{
-    Assn, DataType, Decl, Entry, Expr, Field, Insert, Prog, Record, ReplCmd, Service, Test,
+    Assn, DataType, Decl, Expr, Field, Insert, Prog, ReplCmd, Service, Test,
 };
 use std::{
     collections::{HashMap, HashSet},

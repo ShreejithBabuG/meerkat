@@ -26,7 +26,7 @@ impl Expr {
             Expr::KeyVal { value, .. } => {
                 value.free_var(reactive_names, var_binded)
             }
-            Expr::Vector { val } => {
+            Expr::Tuple { val } => {
                 let mut free_vars = HashSet::new();
                 for item in val {
                     free_vars.extend(item.free_var(reactive_names, var_binded));
@@ -50,7 +50,7 @@ impl Expr {
                 new_binds.extend(params.iter().cloned());
                 body.free_var(reactive_names, &new_binds)
             }
-            Expr::FuncApply { func, args } => {
+            Expr::Call { func, args } => {
                 let mut free_vars = func.free_var(reactive_names, var_binded);
                 for arg in args {
                     free_vars.extend(arg.free_var(reactive_names, var_binded));

@@ -23,6 +23,7 @@ inline_colorization = "0.1.5"
 log = "0.4"
 anyhow = "1"
 thiserror = "1"
+async-recursion = "1.0"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 libp2p = { version = "0.56", features = ["tokio", "tcp", "dns", "websocket", "noise", "yamux", "relay", "dcutr", "identify", "macros"] }

@@ -1,6 +1,6 @@
 use log::info;
 
-use crate::{ast::{Assn, BinOp, Expr, Record, UnOp}, runtime::manager::assert};
+use crate::{ast::{Assn, BinOp, Expr, UnOp}, runtime::manager::assert};
 use core::panic;
 use std::{collections::{HashMap, HashSet}, iter::zip, mem, ops::Deref, vec};
 
@@ -64,7 +64,7 @@ impl Evaluator {
                 },
                 _ => panic!(),
             }
-        } else if let (Expr::Table {records: records1,.. }, Expr::Vector { val: records2, .. }) = (expr1, expr2) {       // manually listing records will be of vector type
+        } else if let (Expr::Table {records: records1,.. }, Expr::Tuple { val: records2, .. }) = (expr1, expr2) {       // manually listing records will be of vector type
             // println!("First table: {:?}", records1);
             // println!("Second vector: {:?}", records2);
             match op {
@@ -93,7 +93,7 @@ impl Evaluator {
             Expr::Number { val } => Ok(()),
             Expr::Bool { val } => Ok(()),
             Expr::String {val} => Ok(()),
-            Expr::Vector { val } => {
+            Expr::Tuple { val } => {
                 for expr in val {
                     self.eval_expr(expr)?;
                 }
@@ -137,7 +137,7 @@ impl Evaluator {
                 self.eval_expr(expr2)?;
                 use Expr::*;
                 match (expr1.as_mut(), expr2.as_mut()) {
-                    (Number { .. }, Number { .. }) | (Bool { .. }, Bool { .. }) | (String { .. }, String { .. }) | (Table {..},Table{..}) | (Table{..}, Vector { .. }) => {
+                    (Number { .. }, Number { .. }) | (Bool { .. }, Bool { .. }) | (String { .. }, String { .. }) | (Table {..},Table{..}) | (Table{..}, Tuple { .. }) => {
                         *expr = Self::calc_binop(*op, expr1, expr2)?;
                         Ok(())
                     }
@@ -171,7 +171,7 @@ impl Evaluator {
                 Ok(())
             }
 
-            Expr::FuncApply { func, args } => {
+            Expr::Call { func, args } => {
                 self.eval_expr(func)?;
 
                 match func.as_mut() {
@@ -240,7 +240,7 @@ impl Evaluator {
 
                 for record in records {
                     let record_vals = match record {
-                        Expr::Vector { val } => val.clone(),
+                        Expr::Tuple { val } => val.clone(),
                         _ => panic!("Record is not a vector")
                     };
 
@@ -261,7 +261,7 @@ impl Evaluator {
                     if let Expr::Bool { val } = *evaluated_where {        // if the condition satisfies for that record, add that record
                         if val {                            
                             if column_names.len() == 0 {       // if no columns mentioned, add all
-                                selected_records.push(Expr::Vector { val: record_vals });
+                                selected_records.push(Expr::Tuple { val: record_vals });
                             }
                             else {
                                 let mut new_vals = Vec::new();
@@ -272,7 +272,7 @@ impl Evaluator {
                                         return Err(format!("Column '{}' not found in schema", col));
                                     }
                                 }
-                                selected_records.push(Expr::Vector { val: new_vals });
+                                selected_records.push(Expr::Tuple { val: new_vals });
                             }
                         }
                     } 
@@ -312,7 +312,7 @@ impl Evaluator {
                         let mut column_vals = Vec::new();
                         for record in records {
                             let val = match record {
-                                Expr::Vector { val } => {
+                                Expr::Tuple { val } => {
                                     val[column_id].clone()
                                 }
                                 _ => panic!("Not a vector")

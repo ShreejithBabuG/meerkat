@@ -1,6 +1,6 @@
 use std::{collections::HashSet, hash::Hash};
 
-use crate::ast::{Assn, Decl, Entry, Expr, Insert, Record};
+use crate::ast::{Assn, Decl, Expr, Insert};
 
 use log::info;
 
@@ -47,7 +47,7 @@ impl Evaluator {
     }
     pub fn eval_insert(&mut self, insert: &mut Insert) -> Result<(), String> {
         self.eval_expr(&mut insert.row)?;
-        if let Expr::Vector { val } = &insert.row {
+        if let Expr::Tuple { val } = &insert.row {
             let found_table = self
                 .reactive_name_to_vals
                 .get_mut(&insert.table_name)
@@ -60,7 +60,7 @@ impl Evaluator {
                     }
                 }
                 
-                target_records.push(Expr::Vector { val: curr_record });
+                target_records.push(Expr::Tuple { val: curr_record });
             } else {
                 panic!("Not a table");
             }

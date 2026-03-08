@@ -14,7 +14,7 @@ impl TableValueState {
     }
 
     pub fn update(&mut self, insert: &Insert) {
-        assert!(matches!(insert.row, Expr::Vector { val: _ }));
+        assert!(matches!(insert.row, Expr::Tuple { val: _ }));
         if let TableValueState::Val(Expr::Table { records, .. }) = self {
             records.push(insert.row.clone());
         } else {
