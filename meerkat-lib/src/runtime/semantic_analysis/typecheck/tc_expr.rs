@@ -12,7 +12,8 @@ impl TypecheckEnv {
                 Value::Bool { .. } => Bool,
                 Value::String { .. } => String,
                 Value::Closure { .. } => panic!("Cannot typecheck closure literal"),
-            },            Expr::KeyVal { key, value } => self.infer_expr(&value),
+            },
+            Expr::KeyVal { key, value } => self.infer_expr(&value),
             Expr::Tuple { val } => {
                 let mut type_vec = Vec::new();
                 for el in val {
@@ -188,13 +189,13 @@ impl TypecheckEnv {
             }
             Expr::Select { table_name, column_names, where_clause } => {
                 let schema = {
-                    let table_type = self.var_context.get(table_name);    // check if table exists and extract schema
+                    let table_type = self.var_context.get(table_name);
                     match table_type {
                         Some(Type::Table(fields)) => fields.clone(),
                         _ => panic!("Table {} for selection not found or not a table type", table_name),
                     }
                 };
-                let field_names: Vec<_> = schema.iter().map(|field| field.name.clone()).collect();   // get column names and check if columns to be selected exist
+                let field_names: Vec<_> = schema.iter().map(|field| field.name.clone()).collect();
                 for column_name in column_names {
                     if !field_names.contains(column_name) {
                         panic!("{} field not found in table {}", column_name, table_name);
@@ -209,7 +210,6 @@ impl TypecheckEnv {
                 Type::Table(schema)    
             }
             Expr::TableColumn { table_name, column_name } => {
-                // Look up table type in context
                 let found_table = self.var_context.get(table_name);
                 match found_table {
                     Some(Type::Table(fields)) => {
@@ -228,20 +228,15 @@ impl TypecheckEnv {
             }
             Expr::Table {schema, records } => Table(schema.to_vec()),
             Expr::Fold { table_column, operation, identity } => {
-                if args.len()!=3 {
-                    panic!("Fold expects 3 arguments, got {} arguments", args.len());
-                }
-                
-                let column_type = self.infer_expr(&args[0]);
-                let func_type = self.infer_expr(&args[1]);
-                let accum_type = self.infer_expr(&args[2]);
+                let column_type = self.infer_expr(table_column);
+                let func_type = self.infer_expr(operation);
+                let accum_type = self.infer_expr(identity);
 
-                if let Expr::TableColumn { .. } = &args[0] {     // Maybe later we can have a tablecolumn type for typechecking here
-                    self.infer_expr(&args[0]);
+                if let Expr::TableColumn { .. } = table_column.as_ref() {
+                    self.infer_expr(table_column);
                 } else {         
                     panic!("First argument should be iterator (column)");
                 }
-
                 match func_type {
                     Type::Fun(params, ret_type) => {
                         if !self.unify(&accum_type, &*ret_type) {
@@ -256,14 +251,7 @@ impl TypecheckEnv {
                     _ => panic!("Second argument must be function type")
                 }
                 self.find(&accum_type)
-                
-            },
-            
+            }
         }
+    }
 }
-}
-
-// TODO List
-// (priority) implement statics for actions
-// 1. more efficient implementation of var context
-// 2. add language feature: let binding

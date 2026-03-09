@@ -72,9 +72,9 @@ impl Expr {
             }
             Expr::TableColumn { .. } => {},
             Expr::Fold { table_column, operation, identity } => {
-                for arg in args {
-                    arg.alpha_rename(var_binded, renames);
-                }
+                table_column.alpha_rename(var_binded, renames);
+                operation.alpha_rename(var_binded, renames);
+                identity.alpha_rename(var_binded, renames);
             },
         
         }

@@ -88,9 +88,9 @@ impl Expr {
             }
             Expr::Fold { table_column, operation, identity } => {
                 let mut free_vars = HashSet::new();
-                free_vars.extend(args[0].free_var(reactive_names, var_binded));
-                free_vars.extend(args[1].free_var(reactive_names, var_binded));
-                free_vars.extend(args[2].free_var(reactive_names, var_binded));
+                free_vars.extend(table_column.free_var(reactive_names, var_binded));
+                free_vars.extend(operation.free_var(reactive_names, var_binded));
+                free_vars.extend(identity.free_var(reactive_names, var_binded));
                 
                 free_vars
             }

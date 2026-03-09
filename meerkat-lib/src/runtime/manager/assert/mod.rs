@@ -24,7 +24,7 @@ use tokio::sync::mpsc::Sender;
 use crate::runtime::{def_actor::DefActor, message::CmdMsg, transaction::TxnId, TestId};
 
 mod do_test;
-mod test_manager;
+// mod test_manager;
 
 #[derive(Debug)]
 pub struct TestManager {
