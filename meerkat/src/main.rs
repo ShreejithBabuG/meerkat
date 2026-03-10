@@ -29,7 +29,7 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
     let prog = meerkat_lib::runtime::parser::parser::parse_file(&args.input_file)
         .map_err(|e| format!("Parse error: {}", e))?;
 
-    runtime::run(&prog).await?;
+    //runtime::run(&prog).await?;
 
     Ok(())
 }

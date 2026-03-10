@@ -15,7 +15,7 @@ impl Expr {
         var_binded: &HashSet<String>, // should be initialized by all reactive name declared in the service
     ) -> HashSet<String> {
         match self {
-            Expr::Number { .. } | Expr::Bool { .. } | Expr::String { .. } | Expr::Table { .. }=> HashSet::new(),
+            Expr::Literal { .. } | Expr::Table { .. }=> HashSet::new(),
             Expr::Variable { ident } => {
                 if var_binded.contains(ident) {
                     HashSet::new()
@@ -86,11 +86,11 @@ impl Expr {
             Expr::TableColumn { table_name, .. } => {
                 HashSet::from([table_name.to_string()])
             }
-            Expr::Fold { args } => { 
+            Expr::Fold { table_column, operation, identity } => {
                 let mut free_vars = HashSet::new();
-                free_vars.extend(args[0].free_var(reactive_names, var_binded));
-                free_vars.extend(args[1].free_var(reactive_names, var_binded));
-                free_vars.extend(args[2].free_var(reactive_names, var_binded));
+                free_vars.extend(table_column.free_var(reactive_names, var_binded));
+                free_vars.extend(operation.free_var(reactive_names, var_binded));
+                free_vars.extend(identity.free_var(reactive_names, var_binded));
                 
                 free_vars
             }

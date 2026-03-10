@@ -9,9 +9,10 @@ use crate::runtime::manager::action::TxnManager;
 use crate::runtime::manager::assert::TestManager;
 use crate::runtime::message::CmdMsg;
 use crate::runtime::TestId;
+use crate::ast::Value;
 
 use crate::runtime::def_actor::DefActor;
-use crate::runtime::evaluator::Evaluator;
+// // // use crate::runtime::evaluator::Evaluator;
 use crate::runtime::transaction::TxnId;
 use crate::runtime::var_actor::VarActor;
 use crate::runtime::table_actor::TableActor;
@@ -76,5 +77,13 @@ impl Display for Manager {
         )?;
         // write!(f, "txn_mgrs: {:?}\n", self.txn_mgrs)?;
         Ok(())
+    }
+}
+
+impl Manager {
+    pub async fn lookup(&mut self, ident: &str) -> Value {
+        // TODO: Implement proper lookup
+        // For now, panic to show what needs implementation
+        panic!("Manager.lookup() not yet implemented for: {}", ident)
     }
 }
