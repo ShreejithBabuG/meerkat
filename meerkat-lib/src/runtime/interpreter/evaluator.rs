@@ -87,8 +87,15 @@ pub async fn eval(expr: &Expr, env: &Vec<(String, Value)>, manager: &mut Manager
                 _ => Err(EvalError::TypeError("Condition must be boolean".to_string())),
             }
         }
+        Expr::Func { params, body } => {
+            // Create a closure capturing the current environment
+            Ok(Value::Closure {
+                params: params.clone(),
+                body: body.clone(),
+                env: env.clone(),
+            })
+        }
         _ => Err(EvalError::NotImplemented),
-
     }
 }
 
@@ -118,5 +125,30 @@ mod tests {
         };
         let result = eval(&expr, &env, &mut manager).await.unwrap();
         assert_eq!(result, Value::Number { val: 5 });
+    }
+
+    #[tokio::test]
+    async fn test_func_and_call() {
+        let mut manager = Manager::default();
+        let env = vec![];
+        
+        // Create a function: func(x) { x + 10 }
+        let func_expr = Expr::Func {
+            params: vec!["x".to_string()],
+            body: Box::new(Expr::Binop {
+                op: BinOp::Add,
+                expr1: Box::new(Expr::Variable { ident: "x".to_string() }),
+                expr2: Box::new(Expr::Literal { val: Value::Number { val: 10 } }),
+            }),
+        };
+        
+        // Call the function with argument 5
+        let call_expr = Expr::Call {
+            func: Box::new(func_expr),
+            args: vec![Expr::Literal { val: Value::Number { val: 5 } }],
+        };
+        
+        let result = eval(&call_expr, &env, &mut manager).await.unwrap();
+        assert_eq!(result, Value::Number { val: 15 });
     }
 }
