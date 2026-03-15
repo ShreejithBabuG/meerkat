@@ -1,5 +1,5 @@
 use crate::ast::{
-    Expr, Value, BinOp, UnOp
+    Expr, Value, BinOp, UnOp, ActionStmt
 };
 use crate::runtime::Manager;
 
@@ -95,6 +95,13 @@ pub async fn eval(expr: &Expr, env: &Vec<(String, Value)>, manager: &mut Manager
                 env: env.clone(),
             })
         }
+        Expr::Action(stmts) => {
+            // Create an action closure capturing the current environment
+            Ok(Value::ActionClosure {
+                stmts: stmts.clone(),
+                env: env.clone(),
+            })
+        }
         _ => Err(EvalError::NotImplemented),
     }
 }
@@ -150,5 +157,29 @@ mod tests {
         
         let result = eval(&call_expr, &env, &mut manager).await.unwrap();
         assert_eq!(result, Value::Number { val: 15 });
+    }
+
+    #[tokio::test]
+    async fn test_action_creation() {
+        let mut manager = Manager::default();
+        let env = vec![];
+        
+        // Create an action: action { x = 5; }
+        let action_expr = Expr::Action(vec![
+            ActionStmt::Assign {
+                var: "x".to_string(),
+                expr: Expr::Literal { val: Value::Number { val: 5 } },
+            },
+        ]);
+        
+        let result = eval(&action_expr, &env, &mut manager).await.unwrap();
+        
+        // Should create an ActionClosure
+        match result {
+            Value::ActionClosure { stmts, env: _ } => {
+                assert_eq!(stmts.len(), 1);
+            }
+            _ => panic!("Expected ActionClosure"),
+        }
     }
 }
