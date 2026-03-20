@@ -2,6 +2,7 @@ use crate::ast::{
     Expr, Value, BinOp, UnOp, ActionStmt
 };
 use crate::runtime::Manager;
+use std::collections::HashSet;
 
 #[derive(Debug)]
 pub enum EvalError {
@@ -88,15 +89,32 @@ pub async fn eval(expr: &Expr, env: &Vec<(String, Value)>, manager: &mut Manager
             }
         }
         Expr::Func { params, body } => {
-            // Create a closure capturing the current environment
+            // Build var_binded with ONLY the function parameters
+            // (not the environment variables - those are potentially free)
+            let mut var_binded: HashSet<String> = params.iter().cloned().collect();
+            
+            // Compute free variables (we don't have reactive_names in this context, use empty set)
+            let reactive_names = HashSet::new();
+            let free_vars = body.free_var(&reactive_names, &var_binded);
+            
+            // Filter environment to only include free variables
+            let captured_env: Vec<(String, Value)> = env.iter()
+                .filter(|(name, _)| free_vars.contains(name))
+                .cloned()
+                .collect();
+            
+            // Create a closure with minimal captured environment
             Ok(Value::Closure {
                 params: params.clone(),
                 body: body.clone(),
-                env: env.clone(),
+                env: captured_env,
             })
         }
         Expr::Action(stmts) => {
-            // Create an action closure capturing the current environment
+            // For actions, we also want to minimize the captured environment
+            // Compute free variables in all statements
+            // For now, capture the full environment as ActionStmt free_var is not implemented
+            // TODO: implement free_var for ActionStmt and optimize this
             Ok(Value::ActionClosure {
                 stmts: stmts.clone(),
                 env: env.clone(),
@@ -180,6 +198,41 @@ mod tests {
                 assert_eq!(stmts.len(), 1);
             }
             _ => panic!("Expected ActionClosure"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_closure_captures_only_free_vars() {
+        let mut manager = Manager::default();
+        
+        // Environment with multiple variables
+        let env = vec![
+            ("a".to_string(), Value::Number { val: 1 }),
+            ("b".to_string(), Value::Number { val: 2 }),
+            ("c".to_string(), Value::Number { val: 3 }),
+        ];
+        
+        // Create a function that only uses 'a': func(x) { x + a }
+        let func_expr = Expr::Func {
+            params: vec!["x".to_string()],
+            body: Box::new(Expr::Binop {
+                op: BinOp::Add,
+                expr1: Box::new(Expr::Variable { ident: "x".to_string() }),
+                expr2: Box::new(Expr::Variable { ident: "a".to_string() }),
+            }),
+        };
+        
+        let result = eval(&func_expr, &env, &mut manager).await.unwrap();
+        
+        // Check that closure only captures 'a', not 'b' or 'c'
+        match result {
+            Value::Closure { params, body: _, env: captured_env } => {
+                assert_eq!(params.len(), 1);
+                assert_eq!(captured_env.len(), 1); // Should only capture 'a'
+                assert_eq!(captured_env[0].0, "a");
+                assert_eq!(captured_env[0].1, Value::Number { val: 1 });
+            }
+            _ => panic!("Expected Closure"),
         }
     }
 }
