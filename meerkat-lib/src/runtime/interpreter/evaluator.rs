@@ -1,8 +1,8 @@
 use crate::ast::{
     Expr, Value, BinOp, UnOp, ActionStmt
 };
-use crate::runtime::Manager;
 use std::collections::HashSet;
+use crate::runtime::manager::Manager;
 
 #[derive(Debug)]
 pub enum EvalError {
