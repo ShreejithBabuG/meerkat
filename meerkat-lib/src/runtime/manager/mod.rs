@@ -9,34 +9,32 @@ pub struct Service {
 
 pub struct Manager {
     pub services: HashMap<String, Service>,
-    pub current_service: Option<String>,
 }
 
 impl Manager {
     pub fn new() -> Self {
         Manager {
             services: HashMap::new(),
-            current_service: None,
         }
     }
 
     pub async fn create_service(&mut self, name: String, decls: Vec<Decl>)
-    -> Result<(), EvalError>
+        -> Result<(), EvalError>
     {
         let mut service = Service {
             name: name.clone(),
             vars: HashMap::new(),
         };
-        self.current_service = Some(name.clone());
 
-        let mut env: Vec<(String, Value)> = vec![];  // accumulate evaluated vars here
+        let mut env: Vec<(String, Value)> = vec![];
+        let svc_name = name.clone(); // save before loop shadows `name`
 
         for decl in decls {
             match decl {
                 Decl::VarDecl { name, val } |
                 Decl::DefDecl { name, val, .. } => {
-                    let value = eval(&val, &env, self).await?;  // pass env, not empty vec
-                    env.push((name.clone(), value.clone()));    // make it visible to later decls
+                    let value = eval(&val, &env, self, &svc_name).await?;
+                    env.push((name.clone(), value.clone()));
                     service.vars.insert(name, value);
                 }
                 Decl::TableDecl { .. } => {
@@ -49,15 +47,13 @@ impl Manager {
         Ok(())
     }
 
-    pub async fn lookup(&mut self, ident: &str) -> Result<Value, EvalError> {
-        if let Some(service_name) = self.current_service.clone() {
-            if let Some(service) = self.services.get(&service_name) {
-                if let Some(value) = service.vars.get(ident) {
-                    return Ok(value.clone() as Value);
-                }
+    pub async fn lookup(&mut self, ident: &str, service_name: &str) -> Result<Value, EvalError> {
+        if let Some(service) = self.services.get(service_name) {
+            if let Some(value) = service.vars.get(ident) {
+                return Ok(value.clone());
             }
         }
-        Err(EvalError::LookupError(format!("Variable '{}' not found", ident)))
+        Err(EvalError::LookupError(format!("Variable '{}' not found in service '{}'", ident, service_name)))
     }
 }
 
@@ -76,7 +72,6 @@ mod tests {
     async fn test_create_service_with_var() {
         let mut manager = Manager::new();
 
-        // service foo { var x = 1; }
         let decls = vec![
             Decl::VarDecl {
                 name: "x".to_string(),
@@ -86,8 +81,7 @@ mod tests {
 
         manager.create_service("foo".to_string(), decls).await.unwrap();
 
-        // lookup should find x in the foo service
-        let result = manager.lookup("x").await.unwrap();
+        let result = manager.lookup("x", "foo").await.unwrap();
         assert_eq!(result, Value::Number { val: 1 });
     }
 
@@ -114,7 +108,7 @@ mod tests {
 
         manager.create_service("foo".to_string(), decls).await.unwrap();
 
-        let result = manager.lookup("f").await.unwrap();
+        let result = manager.lookup("f", "foo").await.unwrap();
         assert_eq!(result, Value::Number { val: 5 });
     }
 
@@ -123,7 +117,7 @@ mod tests {
         let mut manager = Manager::new();
         manager.create_service("foo".to_string(), vec![]).await.unwrap();
 
-        let result = manager.lookup("nonexistent").await;
+        let result = manager.lookup("nonexistent", "foo").await;
         assert!(result.is_err());
     }
 }

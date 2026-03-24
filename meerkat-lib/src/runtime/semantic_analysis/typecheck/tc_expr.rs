@@ -13,7 +13,8 @@ impl TypecheckEnv {
                 Value::String { .. } => String,
                 Value::Closure { .. } => panic!("Cannot typecheck closure literal"),
                 Value::ActionClosure { .. } => panic!("Cannot typecheck action closure literal"),
-            },            Expr::KeyVal { key, value } => self.infer_expr(&value),
+            },
+            Expr::KeyVal { key, value } => self.infer_expr(&value),
             Expr::Tuple { val } => {
                 let mut type_vec = Vec::new();
                 for el in val {
@@ -232,11 +233,11 @@ impl TypecheckEnv {
                 match func_type {
                     Type::Fun(params, ret_type) => {
                         if !self.unify(&accum_type, &*ret_type) {
-                            panic!("Accumulator type should match function return type");
+                            panic!("Accumulator type should match function return type, expected {}, got {}", &*ret_type, &accum_type);
                         }
                         for param in params {
                             if !self.unify(&param, &column_type) {
-                                panic!("Column type should match function argument type");
+                                panic!("Column type should match function argument type, expected {}, got {}", &param, &column_type);
                             }
                         }
                     },
