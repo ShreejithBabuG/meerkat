@@ -181,21 +181,19 @@ impl TypecheckEnv {
                 }
             }
 
-            // more todo on Action type
-            Expr::Action(stmts) => {
-                self.typecheck_action(stmts);
-
+            // more todo on Action type - typecheck not yet implemented
+            Expr::Action(_stmts) => {
                 Action
             }
             Expr::Select { table_name, column_names, where_clause } => {
                 let schema = {
-                    let table_type = self.var_context.get(table_name);
+                    let table_type = self.var_context.get(table_name);    // check if table exists and extract schema
                     match table_type {
                         Some(Type::Table(fields)) => fields.clone(),
                         _ => panic!("Table {} for selection not found or not a table type", table_name),
                     }
                 };
-                let field_names: Vec<_> = schema.iter().map(|field| field.name.clone()).collect();
+                let field_names: Vec<_> = schema.iter().map(|field| field.name.clone()).collect();   // get column names and check if columns to be selected exist
                 for column_name in column_names {
                     if !field_names.contains(column_name) {
                         panic!("{} field not found in table {}", column_name, table_name);
@@ -209,45 +207,50 @@ impl TypecheckEnv {
                 }
                 Type::Table(schema)    
             }
+
             Expr::Table {schema, records } => Table(schema.to_vec()),
             Expr::Fold { table_name, column_name, operation, identity } => {
-                let column_type = self.get_column_type(table_name, column_name);
+                // Look up table and resolve column type from AST fields
+                let column_type = {
+                    let table_type = self.var_context.get(table_name);
+                    match table_type {
+                        Some(Type::Table(fields)) => {
+                            let field = fields.iter().find(|f| &f.name == column_name);
+                            match field {
+                                Some(f) => match f.type_ {
+                                    DataType::Bool => Type::Bool,
+                                    DataType::Number => Type::Int,
+                                    DataType::String => Type::String,
+                                },
+                                None => panic!("Column {} not found in table {}", column_name, table_name),
+                            }
+                        }
+                        _ => panic!("Table {} not found or not a table type", table_name),
+                    }
+                };
                 let func_type = self.infer_expr(operation);
                 let accum_type = self.infer_expr(identity);
-
                 match func_type {
                     Type::Fun(params, ret_type) => {
                         if !self.unify(&accum_type, &*ret_type) {
-                            panic!("Accumulator type should be the same as function return type, expected {}, got {}", &*ret_type, &accum_type);
+                            panic!("Accumulator type should match function return type, expected {}, got {}", &*ret_type, &accum_type);
                         }
                         for param in params {
                             if !self.unify(&param, &column_type) {
-                                panic!("Column type should be the same as function argument type, expected {}, got {}", &param, &column_type);
+                                panic!("Column type should match function argument type, expected {}, got {}", &param, &column_type);
                             }
                         }
                     },
                     _ => panic!("Second argument must be function type")
                 }
                 self.find(&accum_type)
-            }
-        }
-    }
-
-fn get_column_type(&mut self, table_name: &String, column_name: &String) -> Type {
-        let found_table = self.var_context.get(table_name);
-        match found_table {
-            Some(Type::Table(fields)) => {
-                let found_column = fields.iter().find(|field| &field.name == column_name);
-                match found_column {
-                    Some(field) => match field.type_ {
-                        DataType::Bool => Type::Bool,
-                        DataType::Number => Type::Int,
-                        DataType::String => Type::String,
-                    },
-                    None => panic!("Column {} not found in table {}", column_name, table_name),
-                }
-            }
-            _ => panic!("Table {} for TableColumn not found or not a table type", table_name),
-        }
-    }
+            },
 }
+
+}
+}
+
+// TODO List
+// (priority) implement statics for actions
+// 1. more efficient implementation of var context
+// 2. add language feature: let binding
