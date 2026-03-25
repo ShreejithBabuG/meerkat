@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use super::ast::{Value, Decl};
-use super::interpreter::{eval, EvalError};
+use super::interpreter::{eval, EvalContext, EvalError};
 
 pub struct Service {
     pub name: String,
@@ -33,7 +33,7 @@ impl Manager {
             match decl {
                 Decl::VarDecl { name, val } |
                 Decl::DefDecl { name, val, .. } => {
-                    let value = eval(&val, &env, self, &svc_name).await?;
+                    let value = eval(&val, &env, &mut EvalContext { manager: self, service_name: &svc_name }).await?;
                     env.push((name.clone(), value.clone()));
                     service.vars.insert(name, value);
                 }
