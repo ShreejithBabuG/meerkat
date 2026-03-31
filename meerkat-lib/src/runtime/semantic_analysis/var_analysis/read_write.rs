@@ -1,10 +1,5 @@
-use core::panic;
-use std::{
-    collections::{HashMap, HashSet},
-    hash::Hash,
-};
-
-use crate::ast::{Expr};
+use std::collections::HashSet;
+use crate::ast::{Expr, ActionStmt};
 
 impl Expr {
     /// return free variables in expr wrt var_binded, used for
@@ -13,10 +8,10 @@ impl Expr {
     pub fn free_var(
         &self,
         reactive_names: &HashSet<String>,
-        var_binded: &HashSet<String>, // should be initialized by all reactive name declared in the service
+        var_binded: &HashSet<String>,
     ) -> HashSet<String> {
         match self {
-            Expr::Literal { .. } | Expr::Table { .. }=> HashSet::new(),
+            Expr::Literal { .. } | Expr::Table { .. } => HashSet::new(),
             Expr::Variable { ident } => {
                 if var_binded.contains(ident) {
                     HashSet::new()
@@ -34,8 +29,8 @@ impl Expr {
                 }
                 free_vars
             }
-            Expr::Unop { op, expr } => expr.free_var(reactive_names, var_binded),
-            Expr::Binop { op, expr1, expr2 } => {
+            Expr::Unop { op: _, expr } => expr.free_var(reactive_names, var_binded),
+            Expr::Binop { op: _, expr1, expr2 } => {
                 let mut free_vars = expr1.free_var(reactive_names, var_binded);
                 free_vars.extend(expr2.free_var(reactive_names, var_binded));
                 free_vars
@@ -58,15 +53,27 @@ impl Expr {
                 }
                 free_vars
             }
-
-            Expr::Action(stmts, .. ) => {
+            Expr::Action(stmts) => {
                 let mut free_vars = HashSet::new();
                 for stmt in stmts {
-                    // TODO: implement me
-                    panic!("free_var for statments is not implemented yet");
+                    match stmt {
+                        ActionStmt::Assign { var: _, expr } => {
+                            free_vars.extend(expr.free_var(reactive_names, var_binded));
+                        }
+                        ActionStmt::Do(expr) => {
+                            free_vars.extend(expr.free_var(reactive_names, var_binded));
+                        }
+                        ActionStmt::Assert(expr) => {
+                            free_vars.extend(expr.free_var(reactive_names, var_binded));
+                        }
+                        ActionStmt::Let { name: _, expr } => {
+                            free_vars.extend(expr.free_var(reactive_names, var_binded));
+                        }
+                        ActionStmt::Insert { row, .. } => {
+                            free_vars.extend(row.free_var(reactive_names, var_binded));
+                        }
+                    }
                 }
-
-                // we exclude reactive names from free_vars in action
                 free_vars.difference(reactive_names).cloned().collect()
             }
             Expr::Select { table_name, where_clause, .. } => {
@@ -74,35 +81,12 @@ impl Expr {
                 free_vars.insert(table_name.clone());
                 free_vars
             }
-            Expr::Fold { operation, identity, ..} => {
+            Expr::Fold { operation, identity, .. } => {
                 let mut free_vars = HashSet::new();
                 free_vars.extend(operation.free_var(reactive_names, var_binded));
                 free_vars.extend(identity.free_var(reactive_names, var_binded));
-                
                 free_vars
             }
         }
     }
 }
-/*
-/// Calculate direct read set
-/// used for lock acquisition
-pub fn calc_read_sets(assns: &Vec<Assn>, reactive_names: &HashSet<String>) -> HashSet<String> {
-    let mut direct_reads = HashSet::new();
-    for assn in assns {
-        direct_reads.extend(assn.src.free_var(reactive_names, &HashSet::new()));
-    }
-
-    direct_reads
-}
-
-/// calculate write set (contains var only, no transitive dependency needed)
-/// used for lock acquisition
-pub fn calc_write_set(assns: &Vec<Assn>) -> HashSet<String> {
-    let mut writes = HashSet::new();
-    for assn in assns {
-        writes.insert(assn.dest.clone());
-    }
-    writes
-}
-*/
