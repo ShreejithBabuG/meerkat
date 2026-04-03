@@ -1,10 +1,13 @@
 use std::collections::HashMap;
-use super::ast::{Value, Decl};
+use super::ast::{Value, Decl, Expr, ActionStmt};
 use super::interpreter::{eval, EvalContext, EvalError};
+use super::semantic_analysis::var_analysis::{calc_dep_srv, DependAnalysis};
 
 pub struct Service {
     pub name: String,
-    pub vars: HashMap<String, Value>,
+    pub vars: HashMap<String, Value>,   // vars + evaluated def values
+    pub defs: HashMap<String, Expr>,    // original def expressions for re-evaluation
+    pub dep: DependAnalysis,            // dependency graph + topo order
 }
 
 pub struct Manager {
@@ -21,21 +24,30 @@ impl Manager {
     pub async fn create_service(&mut self, name: String, decls: Vec<Decl>)
         -> Result<(), EvalError>
     {
+        let dep = calc_dep_srv(&decls);
+
         let mut service = Service {
             name: name.clone(),
             vars: HashMap::new(),
+            defs: HashMap::new(),
+            dep,
         };
 
         let mut env: Vec<(String, Value)> = vec![];
-        let svc_name = name.clone(); // save before loop shadows `name`
+        let svc_name = name.clone();
 
         for decl in decls {
             match decl {
-                Decl::VarDecl { name, val } |
-                Decl::DefDecl { name, val, .. } => {
+                Decl::VarDecl { name, val } => {
                     let value = eval(&val, &env, &mut EvalContext { manager: self, service_name: &svc_name }).await?;
                     env.push((name.clone(), value.clone()));
                     service.vars.insert(name, value);
+                }
+                Decl::DefDecl { name, val, .. } => {
+                    let value = eval(&val, &env, &mut EvalContext { manager: self, service_name: &svc_name }).await?;
+                    env.push((name.clone(), value.clone()));
+                    service.vars.insert(name.clone(), value);
+                    service.defs.insert(name, val);  // store original expr
                 }
                 Decl::TableDecl { .. } => {
                     return Err(EvalError::NotImplemented);
@@ -55,6 +67,109 @@ impl Manager {
         }
         Err(EvalError::LookupError(format!("Variable '{}' not found in service '{}'", ident, service_name)))
     }
+
+    pub async fn assign(&mut self, service_name: &str, var: &str, value: Value) -> Result<(), EvalError> {
+        // update the var
+        if let Some(service) = self.services.get_mut(service_name) {
+            if service.vars.contains_key(var) {
+                service.vars.insert(var.to_string(), value);
+            } else {
+                return Err(EvalError::LookupError(format!("Variable '{}' not found in service '{}'", var, service_name)));
+            }
+        } else {
+            return Err(EvalError::LookupError(format!("Service '{}' not found", service_name)));
+        }
+
+        // propagate: re-evaluate defs that depend on this var in topo order
+        self.propagate(service_name, var).await
+    }
+
+    async fn propagate(&mut self, service_name: &str, changed_var: &str) -> Result<(), EvalError> {
+        // collect defs that need re-evaluation in topo order
+        let topo_order: Vec<String> = self.services
+            .get(service_name)
+            .map(|s| s.dep.topo_order.clone())
+            .unwrap_or_default();
+
+        for def_name in topo_order {
+            let needs_update = self.services
+                .get(service_name)
+                .and_then(|s| s.dep.dep_vars.get(&def_name))
+                .map(|dep_vars| dep_vars.contains(changed_var))
+                .unwrap_or(false);
+
+            let is_def = self.services
+                .get(service_name)
+                .map(|s| s.defs.contains_key(&def_name))
+                .unwrap_or(false);
+
+            if needs_update && is_def {
+                // build env from current var values
+                let expr = self.services
+                    .get(service_name)
+                    .and_then(|s| s.defs.get(&def_name))
+                    .cloned();
+
+                if let Some(expr) = expr {
+                    let env: Vec<(String, Value)> = self.services
+                        .get(service_name)
+                        .map(|s| s.vars.iter().map(|(k, v)| (k.clone(), v.clone())).collect())
+                        .unwrap_or_default();
+
+                    let value = eval(&expr, &env, &mut EvalContext { manager: self, service_name }).await?;
+
+                    if let Some(service) = self.services.get_mut(service_name) {
+                        service.vars.insert(def_name, value);
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    #[async_recursion::async_recursion]
+    pub async fn execute_action_stmt(&mut self, stmt: &ActionStmt, env: &[(String, Value)], service_name: &str) -> Result<(), EvalError> {
+        match stmt {
+            ActionStmt::Assign { var, expr } => {
+                let value = eval(expr, env, &mut EvalContext { manager: self, service_name }).await?;
+                self.assign(service_name, var, value).await
+            }
+            ActionStmt::Do(expr) => {
+                let val = eval(expr, env, &mut EvalContext { manager: self, service_name }).await?;
+                match val {
+                    Value::ActionClosure { stmts, env: _ } => {
+                        for s in &stmts {
+                            // use empty env so all var/def lookups go through
+                            // the manager and get current values, not stale captured ones
+                            self.execute_action_stmt(s, &[], service_name).await?;
+                        }
+                        Ok(())
+                    }
+                    _ => Err(EvalError::TypeError("do expects an action".to_string())),
+                }
+            }
+            ActionStmt::Assert(expr) => {
+                let val = eval(expr, env, &mut EvalContext { manager: self, service_name }).await?;
+                match val {
+                    Value::Bool { val: true } => Ok(()),
+                    Value::Bool { val: false } => Err(EvalError::TypeError("Assertion failed".to_string())),
+                    _ => Err(EvalError::TypeError("assert expects a boolean".to_string())),
+                }
+            }
+            ActionStmt::Let { name: _, expr } => {
+                let _val = eval(expr, env, &mut EvalContext { manager: self, service_name }).await?;
+                Ok(())
+            }
+            ActionStmt::Insert { .. } => Err(EvalError::NotImplemented),
+        }
+    }
+
+    pub async fn run_test(&mut self, service_name: &str, stmts: &[ActionStmt]) -> Result<(), EvalError> {
+        for stmt in stmts {
+            self.execute_action_stmt(stmt, &[], service_name).await?;
+        }
+        Ok(())
+    }
 }
 
 impl Default for Manager {
@@ -71,16 +186,13 @@ mod tests {
     #[tokio::test]
     async fn test_create_service_with_var() {
         let mut manager = Manager::new();
-
         let decls = vec![
             Decl::VarDecl {
                 name: "x".to_string(),
                 val: Expr::Literal { val: Value::Number { val: 1 } },
             },
         ];
-
         manager.create_service("foo".to_string(), decls).await.unwrap();
-
         let result = manager.lookup("x", "foo").await.unwrap();
         assert_eq!(result, Value::Number { val: 1 });
     }
@@ -88,8 +200,6 @@ mod tests {
     #[tokio::test]
     async fn test_create_service_with_def() {
         let mut manager = Manager::new();
-
-        // service foo { var x = 2; def f = x + 3; }
         let decls = vec![
             Decl::VarDecl {
                 name: "x".to_string(),
@@ -105,9 +215,7 @@ mod tests {
                 is_pub: true,
             },
         ];
-
         manager.create_service("foo".to_string(), decls).await.unwrap();
-
         let result = manager.lookup("f", "foo").await.unwrap();
         assert_eq!(result, Value::Number { val: 5 });
     }
@@ -116,8 +224,38 @@ mod tests {
     async fn test_lookup_missing_var_returns_error() {
         let mut manager = Manager::new();
         manager.create_service("foo".to_string(), vec![]).await.unwrap();
-
         let result = manager.lookup("nonexistent", "foo").await;
         assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_def_updates_after_var_change() {
+        let mut manager = Manager::new();
+        // service foo { var x = 1; def f = x + 10; }
+        let decls = vec![
+            Decl::VarDecl {
+                name: "x".to_string(),
+                val: Expr::Literal { val: Value::Number { val: 1 } },
+            },
+            Decl::DefDecl {
+                name: "f".to_string(),
+                val: Expr::Binop {
+                    op: crate::ast::BinOp::Add,
+                    expr1: Box::new(Expr::Variable { ident: "x".to_string() }),
+                    expr2: Box::new(Expr::Literal { val: Value::Number { val: 10 } }),
+                },
+                is_pub: true,
+            },
+        ];
+        manager.create_service("foo".to_string(), decls).await.unwrap();
+
+        // f should be 11 initially
+        let result = manager.lookup("f", "foo").await.unwrap();
+        assert_eq!(result, Value::Number { val: 11 });
+
+        // update x to 5, f should become 15
+        manager.assign("foo", "x", Value::Number { val: 5 }).await.unwrap();
+        let result = manager.lookup("f", "foo").await.unwrap();
+        assert_eq!(result, Value::Number { val: 15 });
     }
 }

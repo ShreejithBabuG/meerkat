@@ -1,7 +1,7 @@
 use clap::Parser;
 use std::error::Error;
-
-use meerkat_lib::runtime;
+use meerkat_lib::runtime::ast::Stmt;
+use meerkat_lib::runtime::Manager;
 
 #[derive(Parser, Debug)]
 #[command(author, version, about)]
@@ -29,7 +29,23 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
     let prog = meerkat_lib::runtime::parser::parser::parse_file(&args.input_file)
         .map_err(|e| format!("Parse error: {}", e))?;
 
-    //runtime::run(&prog).await?;
+    let mut manager = Manager::new();
+
+    for stmt in &prog {
+        match stmt {
+            Stmt::Service { name, decls } => {
+                manager.create_service(name.clone(), decls.clone()).await
+                    .map_err(|e| format!("Service error: {}", e))?;
+                println!("Service '{}' loaded", name);
+            }
+            Stmt::Test { service, stmts } => {
+                manager.run_test(service, stmts).await
+                    .map_err(|e| format!("Test failed in '{}': {}", service, e))?;
+                println!("@test({}) passed", service);
+            }
+            _ => {}
+        }
+    }
 
     Ok(())
 }
