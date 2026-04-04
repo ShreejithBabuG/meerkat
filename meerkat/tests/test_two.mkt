@@ -1,0 +1,19 @@
+service s1 {
+    var x = 0;
+    pub def inc_x = action { x = x + 1; };
+    pub def y = x + 1;
+}
+
+service s2 {
+    pub def inc_delegate = fn n => s1.inc_x(n);
+    var w = s1.y - 2;
+    pub def z = s1.y * 2;
+}
+
+
+@test(s2) {
+    assert(w == -1);
+    do inc_delegate(1);
+    assert(z==4);
+}
+
