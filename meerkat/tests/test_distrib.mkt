@@ -1,0 +1,10 @@
+import s1 // remotely linked via command-line parameter
+
+service s2 {
+    pub def mul_y = fn n => s1.y * n;
+}
+
+@test(s2) {
+    assert(mul_y(3) == 3);
+}
+
