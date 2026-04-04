@@ -1,0 +1,10 @@
+import s1 // read from file, or remotely linked via command-line parameter
+
+service s2 {
+    pub def z = s1.y * 2;
+}
+
+@test(s2) {
+    assert(z==2);
+}
+
