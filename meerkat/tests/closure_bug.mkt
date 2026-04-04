@@ -1,0 +1,9 @@
+service s {
+    var x = 0;
+    pub def inc_x = fn n => action { x = x + n; };
+}
+@test(s) {
+    assert(x == 0);
+    do inc_x(3);
+    assert(x == 3);
+}
