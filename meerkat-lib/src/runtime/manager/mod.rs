@@ -137,11 +137,18 @@ impl Manager {
             ActionStmt::Do(expr) => {
                 let val = eval(expr, env, &mut EvalContext { manager: self, service_name }).await?;
                 match val {
-                    Value::ActionClosure { stmts, env: _ } => {
+                    Value::ActionClosure { stmts, env: closure_env } => {
+                        // Filter closure env to only include function args (not service vars/defs)
+                        // so stale captured values don't shadow fresh values from the manager
+                        let filtered_env: Vec<(String, Value)> = closure_env.into_iter()
+                            .filter(|(name, _)| {
+                                self.services.get(service_name)
+                                    .map(|s| !s.vars.contains_key(name))
+                                    .unwrap_or(true)
+                            })
+                            .collect();
                         for s in &stmts {
-                            // use empty env so all var/def lookups go through
-                            // the manager and get current values, not stale captured ones
-                            self.execute_action_stmt(s, &[], service_name).await?;
+                            self.execute_action_stmt(s, &filtered_env, service_name).await?;
                         }
                         Ok(())
                     }
