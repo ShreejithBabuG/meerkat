@@ -56,10 +56,6 @@ pub async fn eval(
                     }
                     eval(&body, &new_env, ctx).await
                 }
-                Value::ActionClosure { stmts, env: closure_env, service_name: svc } => {
-                    // calling an action — return as-is preserving service context
-                    Ok(Value::ActionClosure { stmts, env: closure_env, service_name: svc })
-                }
                 _ => Err(EvalError::TypeError("Attempting to call a non-function value".to_string())),
             }
         }
@@ -123,17 +119,44 @@ pub async fn eval(
         }
 
         Expr::Action(stmts) => {
-            // TODO: optimize by computing free vars for ActionStmt
+            // Capture only free variables from the local env (function args etc.)
+            // Service vars/defs are looked up fresh via the manager at execution time
+            use crate::ast::ActionStmt;
+            let mut free_in_action: std::collections::HashSet<String> = std::collections::HashSet::new();
+            for stmt in stmts {
+                match stmt {
+                    ActionStmt::Assign { expr, .. } |
+                    ActionStmt::Do(expr) |
+                    ActionStmt::Assert(expr) => {
+                        free_in_action.extend(expr.free_var(&std::collections::HashSet::new(), &std::collections::HashSet::new()));
+                    }
+                    ActionStmt::Let { expr, .. } => {
+                        free_in_action.extend(expr.free_var(&std::collections::HashSet::new(), &std::collections::HashSet::new()));
+                    }
+                    ActionStmt::Insert { row, .. } => {
+                        free_in_action.extend(row.free_var(&std::collections::HashSet::new(), &std::collections::HashSet::new()));
+                    }
+                }
+            }
+            // Only capture vars from local env (not from service — those are looked up via manager)
+            let captured_env: Vec<(String, Value)> = env.iter()
+                .filter(|(name, _)| free_in_action.contains(name))
+                .cloned()
+                .collect();
             Ok(Value::ActionClosure {
                 stmts: stmts.clone(),
-                env: env.to_vec(),
+                env: captured_env,
                 service_name: ctx.service_name.to_string(),
             })
         }
 
         Expr::MemberAccess { service, member } => {
-            // Look up member in another service
-            ctx.manager.lookup(member, service).await
+            // Check if service is remote
+            if ctx.manager.remote_services.contains_key(service) {
+                ctx.manager.remote_lookup(service, member).await
+            } else {
+                ctx.manager.lookup(member, service).await
+            }
         }
         _ => Err(EvalError::NotImplemented),
     }

@@ -2,6 +2,8 @@ use std::collections::HashMap;
 use super::ast::{Value, Decl, Expr, ActionStmt};
 use super::interpreter::{eval, EvalContext, EvalError};
 use super::semantic_analysis::var_analysis::{calc_dep_srv, DependAnalysis};
+use crate::net::{Address, NetworkCommand, NetworkEvent, MeerkatMessage, NetworkActor};
+use crate::net::network_layer::NetworkLayer;
 
 pub struct Service {
     pub name: String,
@@ -12,12 +14,18 @@ pub struct Service {
 
 pub struct Manager {
     pub services: HashMap<String, Service>,
+    /// Maps service name to remote address (for distributed services)
+    pub remote_services: HashMap<String, Address>,
+    /// Network actor for distributed communication
+    pub network: Option<NetworkActor>,
 }
 
 impl Manager {
     pub fn new() -> Self {
         Manager {
             services: HashMap::new(),
+            remote_services: HashMap::new(),
+            network: None,
         }
     }
 
@@ -153,17 +161,9 @@ impl Manager {
                 match val {
                     Value::ActionClosure { stmts, env: closure_env, service_name: action_svc } => {
                         // Use the action's own service context, not the caller's
-                        let target_svc = action_svc.clone();
-                        // Filter closure env to only include function args (not service vars/defs)
-                        let filtered_env: Vec<(String, Value)> = closure_env.into_iter()
-                            .filter(|(name, _)| {
-                                self.services.get(&target_svc)
-                                    .map(|s| !s.vars.contains_key(name))
-                                    .unwrap_or(true)
-                            })
-                            .collect();
+                        // closure_env only contains free vars (function args etc.), not service vars
                         for s in &stmts {
-                            self.execute_action_stmt(s, &filtered_env, &target_svc).await?;
+                            self.execute_action_stmt(s, &closure_env, &action_svc).await?;
                         }
                         Ok(())
                     }
@@ -183,6 +183,80 @@ impl Manager {
                 Ok(())
             }
             ActionStmt::Insert { .. } => Err(EvalError::NotImplemented),
+        }
+    }
+
+    pub async fn remote_lookup(&mut self, service: &str, member: &str) -> Result<Value, EvalError> {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static NEXT_ID: AtomicU64 = AtomicU64::new(1);
+
+        let full_url = self.remote_services.get(service)
+            .ok_or_else(|| EvalError::LookupError(format!("Remote service '{}' not found", service)))?
+            .clone();
+
+        // Strip the service slug from the end of the address
+        // e.g. /ip4/.../p2p/12D3.../s1 -> /ip4/.../p2p/12D3...
+        let addr_str = full_url.0.trim_end_matches(&format!("/{}", service));
+        let addr = Address::new(addr_str);
+
+        let request_id = NEXT_ID.fetch_add(1, Ordering::SeqCst);
+
+        // Get our local address + peer ID to include as reply_to
+        let reply_to = {
+            let net = self.network.as_mut().unwrap();
+            let peer_id = net.local_peer_id();
+            let reply = net.handle_command(NetworkCommand::GetLocalAddresses).await;
+            match reply {
+                crate::net::NetworkReply::LocalAddresses { addrs } => {
+                    if let Some(addr) = addrs.first() {
+                        format!("{}/p2p/{}", addr.0, peer_id)
+                    } else {
+                        String::new()
+                    }
+                }
+                _ => String::new(),
+            }
+        };
+
+        let msg = MeerkatMessage::LookupRequest {
+            request_id,
+            service: service.to_string(),
+            member: member.to_string(),
+            reply_to,
+        };
+
+        let net = self.network.as_mut()
+            .ok_or_else(|| EvalError::NetworkError("No network layer available".to_string()))?;
+
+        net.handle_command(NetworkCommand::SendMessage { addr, msg }).await;
+
+        // Poll for response with timeout
+        let start = std::time::Instant::now();
+        loop {
+            if start.elapsed().as_secs() > 15 {
+                return Err(EvalError::NetworkError(format!(
+                    "Timeout waiting for remote lookup of {}.{}", service, member
+                )));
+            }
+            let net = self.network.as_mut().unwrap();
+            if let Some(event) = net.try_recv_event() {
+                match event {
+                    NetworkEvent::MessageReceived {
+                        msg: MeerkatMessage::LookupResponse { request_id: rid, value }, ..
+                    } if rid == request_id => {
+                        let val: Value = serde_json::from_str(&value)
+                            .map_err(|e| EvalError::NetworkError(e.to_string()))?;
+                        return Ok(val);
+                    }
+                    NetworkEvent::MessageReceived {
+                        msg: MeerkatMessage::LookupError { request_id: rid, error }, ..
+                    } if rid == request_id => {
+                        return Err(EvalError::LookupError(error));
+                    }
+                    _ => {}
+                }
+            }
+            tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
         }
     }
 
