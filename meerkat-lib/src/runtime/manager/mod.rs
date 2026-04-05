@@ -68,6 +68,11 @@ impl Manager {
     }
 
     pub async fn lookup(&mut self, ident: &str, service_name: &str) -> Result<Value, EvalError> {
+        // Check if service is remote
+        if self.remote_services.contains_key(service_name) {
+            return self.remote_lookup(service_name, ident).await;
+        }
+
         // If it's a def, re-evaluate from stored expression for freshness
         let def_expr = self.services.get(service_name)
             .and_then(|s| s.defs.get(ident))

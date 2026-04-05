@@ -108,7 +108,12 @@ pub async fn eval(
             let var_binded: HashSet<String> = params.iter().cloned().collect();
             let free_vars = body.free_var(&HashSet::new(), &var_binded);
             let captured_env: Vec<(String, Value)> = env.iter()
-                .filter(|(name, _)| free_vars.contains(name))
+                .filter(|(name, _)| {
+                    free_vars.contains(name) &&
+                    !ctx.manager.services.get(ctx.service_name)
+                        .map(|s| s.vars.contains_key(name.as_str()) || s.defs.contains_key(name.as_str()))
+                        .unwrap_or(false)
+                })
                 .cloned()
                 .collect();
             Ok(Value::Closure {
@@ -119,28 +124,17 @@ pub async fn eval(
         }
 
         Expr::Action(stmts) => {
-            // Capture only free variables from the local env (function args etc.)
+            // Use free_var on the Action expression itself to find free variables
             // Service vars/defs are looked up fresh via the manager at execution time
-            use crate::ast::ActionStmt;
-            let mut free_in_action: std::collections::HashSet<String> = std::collections::HashSet::new();
-            for stmt in stmts {
-                match stmt {
-                    ActionStmt::Assign { expr, .. } |
-                    ActionStmt::Do(expr) |
-                    ActionStmt::Assert(expr) => {
-                        free_in_action.extend(expr.free_var(&std::collections::HashSet::new(), &std::collections::HashSet::new()));
-                    }
-                    ActionStmt::Let { expr, .. } => {
-                        free_in_action.extend(expr.free_var(&std::collections::HashSet::new(), &std::collections::HashSet::new()));
-                    }
-                    ActionStmt::Insert { row, .. } => {
-                        free_in_action.extend(row.free_var(&std::collections::HashSet::new(), &std::collections::HashSet::new()));
-                    }
-                }
-            }
-            // Only capture vars from local env (not from service — those are looked up via manager)
+            let action_expr = Expr::Action(stmts.clone());
+            let free_vars = action_expr.free_var(&std::collections::HashSet::new(), &std::collections::HashSet::new());
             let captured_env: Vec<(String, Value)> = env.iter()
-                .filter(|(name, _)| free_in_action.contains(name))
+                .filter(|(name, _)| {
+                    free_vars.contains(name) &&
+                    !ctx.manager.services.get(ctx.service_name)
+                        .map(|s| s.vars.contains_key(name.as_str()) || s.defs.contains_key(name.as_str()))
+                        .unwrap_or(false)
+                })
                 .cloned()
                 .collect();
             Ok(Value::ActionClosure {
@@ -151,12 +145,8 @@ pub async fn eval(
         }
 
         Expr::MemberAccess { service, member } => {
-            // Check if service is remote
-            if ctx.manager.remote_services.contains_key(service) {
-                ctx.manager.remote_lookup(service, member).await
-            } else {
-                ctx.manager.lookup(member, service).await
-            }
+            // Manager figures out whether service is local or remote
+            ctx.manager.lookup(member, service).await
         }
         _ => Err(EvalError::NotImplemented),
     }
