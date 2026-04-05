@@ -185,6 +185,10 @@ impl TypecheckEnv {
             Expr::Action(_stmts) => {
                 Action
             }
+            Expr::MemberAccess { .. } => {
+                // TODO: typecheck member access across services
+                self.gen_typevar()
+            }
             Expr::Select { table_name, column_names, where_clause } => {
                 let schema = {
                     let table_type = self.var_context.get(table_name);    // check if table exists and extract schema

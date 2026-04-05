@@ -76,6 +76,10 @@ impl Expr {
                 }
                 free_vars.difference(reactive_names).cloned().collect()
             }
+            Expr::MemberAccess { .. } => {
+                // member access on another service - no local free vars
+                HashSet::new()
+            }
             Expr::Select { table_name, where_clause, .. } => {
                 let mut free_vars = where_clause.free_var(reactive_names, var_binded);
                 free_vars.insert(table_name.clone());

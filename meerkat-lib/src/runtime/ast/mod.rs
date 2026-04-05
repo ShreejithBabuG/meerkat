@@ -69,6 +69,7 @@ pub enum Value {
     ActionClosure {
         stmts: Vec<ActionStmt>,
         env: Vec<(String, Value)>,
+        service_name: String,
     },
 }
 
@@ -116,6 +117,10 @@ pub enum Expr {
     /// Action
     Action(Vec<ActionStmt>),
 
+    MemberAccess {
+        service: String,
+        member: String,
+    },
     Select {
         table_name: String,
         column_names: Vec<String>,
@@ -201,8 +206,8 @@ impl Display for Value {
             Value::String { val } => write!(f, "\"{}\"", val),
             Value::Closure { params, body, env } =>
                 write!(f, "fn({})[{:?}]{{{}}}", params.join(","), env, body),
-            Value::ActionClosure { stmts, env } =>
-                write!(f, "action[{:?}]{{{:?}}}", env, stmts),  
+            Value::ActionClosure { stmts, env, service_name } =>
+                write!(f, "action[{:?}][{}]{{{:?}}}", env, service_name, stmts),  
         }
     }
 }
@@ -233,6 +238,7 @@ impl Display for Expr {
                     "Action({:?})",
                     stmts.iter().map(ToString::to_string).collect::<Vec<_>>().join(", ")
                 ),
+            Expr::MemberAccess { service, member } => write!(f, "{}.{}", service, member),
             Expr::Select { table_name, column_names, where_clause } => write!(f, "{}", where_clause),
             Expr::Table {records , ..} => {
                 write!(f, "[",)?;

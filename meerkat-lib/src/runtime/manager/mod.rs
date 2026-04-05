@@ -60,6 +60,20 @@ impl Manager {
     }
 
     pub async fn lookup(&mut self, ident: &str, service_name: &str) -> Result<Value, EvalError> {
+        // If it's a def, re-evaluate from stored expression for freshness
+        let def_expr = self.services.get(service_name)
+            .and_then(|s| s.defs.get(ident))
+            .cloned();
+
+        if let Some(expr) = def_expr {
+            let env: Vec<(String, Value)> = self.services
+                .get(service_name)
+                .map(|s| s.vars.iter().map(|(k, v)| (k.clone(), v.clone())).collect())
+                .unwrap_or_default();
+            return eval(&expr, &env, &mut EvalContext { manager: self, service_name }).await;
+        }
+
+        // Otherwise return stored var value
         if let Some(service) = self.services.get(service_name) {
             if let Some(value) = service.vars.get(ident) {
                 return Ok(value.clone());
@@ -137,18 +151,19 @@ impl Manager {
             ActionStmt::Do(expr) => {
                 let val = eval(expr, env, &mut EvalContext { manager: self, service_name }).await?;
                 match val {
-                    Value::ActionClosure { stmts, env: closure_env } => {
+                    Value::ActionClosure { stmts, env: closure_env, service_name: action_svc } => {
+                        // Use the action's own service context, not the caller's
+                        let target_svc = action_svc.clone();
                         // Filter closure env to only include function args (not service vars/defs)
-                        // so stale captured values don't shadow fresh values from the manager
                         let filtered_env: Vec<(String, Value)> = closure_env.into_iter()
                             .filter(|(name, _)| {
-                                self.services.get(service_name)
+                                self.services.get(&target_svc)
                                     .map(|s| !s.vars.contains_key(name))
                                     .unwrap_or(true)
                             })
                             .collect();
                         for s in &stmts {
-                            self.execute_action_stmt(s, &filtered_env, service_name).await?;
+                            self.execute_action_stmt(s, &filtered_env, &target_svc).await?;
                         }
                         Ok(())
                     }

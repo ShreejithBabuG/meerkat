@@ -43,6 +43,23 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
                     .map_err(|e| format!("Test failed in '{}': {}", service, e))?;
                 println!("@test({}) passed", service);
             }
+            Stmt::Import { path, service: _ } => {
+                // resolve import path relative to the input file's directory
+                let base_dir = std::path::Path::new(&args.input_file)
+                    .parent()
+                    .unwrap_or(std::path::Path::new("."));
+                let import_path = base_dir.join(path);
+                let import_stmts = meerkat_lib::runtime::parser::parser::parse_file(
+                    import_path.to_str().unwrap()
+                ).map_err(|e| format!("Import parse error: {}", e))?;
+                for import_stmt in &import_stmts {
+                    if let Stmt::Service { name, decls } = import_stmt {
+                        manager.create_service(name.clone(), decls.clone()).await
+                            .map_err(|e| format!("Import service error: {}", e))?;
+                        println!("Imported service '{}'", name);
+                    }
+                }
+            }
             _ => {}
         }
     }

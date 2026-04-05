@@ -60,6 +60,7 @@ impl Expr {
                     stmt.alpha_rename(var_binded, renames);
                 }
             }
+            Expr::MemberAccess { .. } => {}
             Expr::Select { where_clause, .. } => {
                 where_clause.alpha_rename(var_binded, renames);
             }

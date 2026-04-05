@@ -56,6 +56,10 @@ pub async fn eval(
                     }
                     eval(&body, &new_env, ctx).await
                 }
+                Value::ActionClosure { stmts, env: closure_env, service_name: svc } => {
+                    // calling an action — return as-is preserving service context
+                    Ok(Value::ActionClosure { stmts, env: closure_env, service_name: svc })
+                }
                 _ => Err(EvalError::TypeError("Attempting to call a non-function value".to_string())),
             }
         }
@@ -123,9 +127,14 @@ pub async fn eval(
             Ok(Value::ActionClosure {
                 stmts: stmts.clone(),
                 env: env.to_vec(),
+                service_name: ctx.service_name.to_string(),
             })
         }
 
+        Expr::MemberAccess { service, member } => {
+            // Look up member in another service
+            ctx.manager.lookup(member, service).await
+        }
         _ => Err(EvalError::NotImplemented),
     }
 }
@@ -190,7 +199,7 @@ mod tests {
         ]);
         let result = eval(&action_expr, &[], &mut ctx).await.unwrap();
         match result {
-            Value::ActionClosure { stmts, env: _ } => assert_eq!(stmts.len(), 1),
+            Value::ActionClosure { stmts, .. } => assert_eq!(stmts.len(), 1),
             _ => panic!("Expected ActionClosure"),
         }
     }
