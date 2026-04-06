@@ -165,10 +165,16 @@ impl Manager {
                 let val = eval(expr, env, &mut EvalContext { manager: self, service_name }).await?;
                 match val {
                     Value::ActionClosure { stmts, env: closure_env, service_name: action_svc } => {
-                        // Use the action's own service context, not the caller's
-                        // closure_env only contains free vars (function args etc.), not service vars
-                        for s in &stmts {
-                            self.execute_action_stmt(s, &closure_env, &action_svc).await?;
+                        if self.remote_services.contains_key(&action_svc) {
+                            // Execute action remotely
+                            self.remote_action(&action_svc, stmts, closure_env).await?;
+                            // Heuristic delay to allow remote propagation to complete
+                            tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+                        } else {
+                            // Execute locally
+                            for s in &stmts {
+                                self.execute_action_stmt(s, &closure_env, &action_svc).await?;
+                            }
                         }
                         Ok(())
                     }
@@ -191,37 +197,41 @@ impl Manager {
         }
     }
 
+    /// Get the network address for a remote service (strips the slug)
+    fn remote_addr(&self, service: &str) -> Result<Address, EvalError> {
+        let full_url = self.remote_services.get(service)
+            .ok_or_else(|| EvalError::LookupError(format!("Remote service '{}' not found", service)))?;
+        let addr_str = full_url.0.trim_end_matches(&format!("/{}", service));
+        Ok(Address::new(addr_str))
+    }
+
+    /// Get our local address with peer ID for use as reply_to
+    async fn local_reply_addr(&mut self) -> String {
+        let net = match self.network.as_mut() {
+            Some(n) => n,
+            None => return String::new(),
+        };
+        let peer_id = net.local_peer_id();
+        let reply = net.handle_command(NetworkCommand::GetLocalAddresses).await;
+        match reply {
+            crate::net::NetworkReply::LocalAddresses { addrs } => {
+                if let Some(addr) = addrs.first() {
+                    format!("{}/p2p/{}", addr.0, peer_id)
+                } else {
+                    String::new()
+                }
+            }
+            _ => String::new(),
+        }
+    }
+
     pub async fn remote_lookup(&mut self, service: &str, member: &str) -> Result<Value, EvalError> {
         use std::sync::atomic::{AtomicU64, Ordering};
         static NEXT_ID: AtomicU64 = AtomicU64::new(1);
 
-        let full_url = self.remote_services.get(service)
-            .ok_or_else(|| EvalError::LookupError(format!("Remote service '{}' not found", service)))?
-            .clone();
-
-        // Strip the service slug from the end of the address
-        // e.g. /ip4/.../p2p/12D3.../s1 -> /ip4/.../p2p/12D3...
-        let addr_str = full_url.0.trim_end_matches(&format!("/{}", service));
-        let addr = Address::new(addr_str);
-
+        let addr = self.remote_addr(service)?;
         let request_id = NEXT_ID.fetch_add(1, Ordering::SeqCst);
-
-        // Get our local address + peer ID to include as reply_to
-        let reply_to = {
-            let net = self.network.as_mut().unwrap();
-            let peer_id = net.local_peer_id();
-            let reply = net.handle_command(NetworkCommand::GetLocalAddresses).await;
-            match reply {
-                crate::net::NetworkReply::LocalAddresses { addrs } => {
-                    if let Some(addr) = addrs.first() {
-                        format!("{}/p2p/{}", addr.0, peer_id)
-                    } else {
-                        String::new()
-                    }
-                }
-                _ => String::new(),
-            }
-        };
+        let reply_to = self.local_reply_addr().await;
 
         let msg = MeerkatMessage::LookupRequest {
             request_id,
@@ -265,9 +275,63 @@ impl Manager {
         }
     }
 
+    pub async fn remote_action(&mut self, service: &str, stmts: Vec<ActionStmt>, env: Vec<(String, Value)>) -> Result<(), EvalError> {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static NEXT_ACTION_ID: AtomicU64 = AtomicU64::new(1);
+
+        let addr = self.remote_addr(service)?;
+        let request_id = NEXT_ACTION_ID.fetch_add(1, Ordering::SeqCst);
+        let reply_to = self.local_reply_addr().await;
+
+        let msg = MeerkatMessage::ActionRequest {
+            request_id,
+            service: service.to_string(),
+            stmts,
+            env,
+            reply_to,
+        };
+
+        let net = self.network.as_mut()
+            .ok_or_else(|| EvalError::NetworkError("No network layer available".to_string()))?;
+
+        net.handle_command(NetworkCommand::SendMessage { addr, msg }).await;
+
+        // Wait for response
+        let start = std::time::Instant::now();
+        loop {
+            if start.elapsed().as_secs() > 15 {
+                return Err(EvalError::NetworkError(format!(
+                    "Timeout waiting for remote action on service '{}'", service
+                )));
+            }
+            let net = self.network.as_mut().unwrap();
+            if let Some(event) = net.try_recv_event() {
+                match event {
+                    NetworkEvent::MessageReceived {
+                        msg: MeerkatMessage::ActionResponse { request_id: rid, success, error }, ..
+                    } if rid == request_id => {
+                        if success {
+                            return Ok(());
+                        } else {
+                            return Err(EvalError::NetworkError(
+                                error.unwrap_or_else(|| "Remote action failed".to_string())
+                            ));
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+        }
+    }
+
     pub async fn run_test(&mut self, service_name: &str, stmts: &[ActionStmt]) -> Result<(), EvalError> {
+        self.run_test_with_env(service_name, stmts, &[]).await
+    }
+
+    pub async fn run_test_with_env(&mut self, service_name: &str, stmts: &[ActionStmt], env: &[(String, Value)]) -> Result<(), EvalError> {
         for stmt in stmts {
-            self.execute_action_stmt(stmt, &[], service_name).await?;
+            self.execute_action_stmt(stmt, env, service_name).await?;
         }
         Ok(())
     }

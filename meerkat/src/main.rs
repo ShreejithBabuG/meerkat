@@ -97,7 +97,7 @@ async fn run_server(prog: Vec<Stmt>) -> Result<(), Box<dyn Error>> {
     loop {
         if let Some(event) = net.try_recv_event() {
             match event {
-                NetworkEvent::MessageReceived { peer, msg } => {
+                NetworkEvent::MessageReceived { peer: _, msg } => {
                     match msg {
                         MeerkatMessage::LookupRequest { request_id, service, member, reply_to } => {
                             let result = manager.lookup(&member, &service).await;
@@ -116,25 +116,15 @@ async fn run_server(prog: Vec<Stmt>) -> Result<(), Box<dyn Error>> {
                                 msg: response,
                             }).await;
                         }
-                        MeerkatMessage::ActionRequest { request_id, service, member } => {
-                            let result = manager.lookup(&member, &service).await;
-                            let response = match result {
-                                Ok(meerkat_lib::runtime::ast::Value::ActionClosure { stmts, service_name, .. }) => {
-                                    let exec = manager.run_test(&service_name, &stmts).await;
-                                    MeerkatMessage::ActionResponse {
-                                        request_id,
-                                        success: exec.is_ok(),
-                                        error: exec.err().map(|e| e.to_string()),
-                                    }
-                                }
-                                _ => MeerkatMessage::ActionResponse {
-                                    request_id,
-                                    success: false,
-                                    error: Some(format!("'{}' is not an action", member)),
-                                },
+                        MeerkatMessage::ActionRequest { request_id, service, stmts, env: action_env, reply_to } => {
+                            let result = manager.run_test_with_env(&service, &stmts, &action_env).await;
+                            let response = MeerkatMessage::ActionResponse {
+                                request_id,
+                                success: result.is_ok(),
+                                error: result.err().map(|e| e.to_string()),
                             };
                             net.handle_command(NetworkCommand::SendMessage {
-                                addr: Address::new(&peer),
+                                addr: Address::new(&reply_to),
                                 msg: response,
                             }).await;
                         }
