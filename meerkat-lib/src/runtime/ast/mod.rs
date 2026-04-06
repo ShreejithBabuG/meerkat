@@ -1,13 +1,13 @@
 use std::fmt::Display;
 //use crate::runtime::Manager;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum UnOp {
     Neg, // negate
     Not, // logical not
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum BinOp {
     Add,
     Sub,
@@ -22,7 +22,7 @@ pub enum BinOp {
     Or,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum ActionStmt {
     Let {
         name: String,
@@ -50,7 +50,7 @@ pub enum Stmt {
     Test { service: String, stmts: Vec<ActionStmt> },
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum Value {
     Number {
         val: i32,
@@ -69,10 +69,11 @@ pub enum Value {
     ActionClosure {
         stmts: Vec<ActionStmt>,
         env: Vec<(String, Value)>,
+        service_name: String,
     },
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum Expr {
     /// Basic Lambda Core expressions
     Literal {
@@ -116,6 +117,10 @@ pub enum Expr {
     /// Action
     Action(Vec<ActionStmt>),
 
+    MemberAccess {
+        service: String,
+        member: String,
+    },
     Select {
         table_name: String,
         column_names: Vec<String>,
@@ -155,13 +160,13 @@ pub enum Decl {
     },
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub struct Field {
     pub name: String,
     pub type_: DataType,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum DataType {
     String,
     Number,
@@ -201,8 +206,8 @@ impl Display for Value {
             Value::String { val } => write!(f, "\"{}\"", val),
             Value::Closure { params, body, env } =>
                 write!(f, "fn({})[{:?}]{{{}}}", params.join(","), env, body),
-            Value::ActionClosure { stmts, env } =>
-                write!(f, "action[{:?}]{{{:?}}}", env, stmts),  
+            Value::ActionClosure { stmts, env, service_name } =>
+                write!(f, "action[{:?}][{}]{{{:?}}}", env, service_name, stmts),  
         }
     }
 }
@@ -233,6 +238,7 @@ impl Display for Expr {
                     "Action({:?})",
                     stmts.iter().map(ToString::to_string).collect::<Vec<_>>().join(", ")
                 ),
+            Expr::MemberAccess { service, member } => write!(f, "{}.{}", service, member),
             Expr::Select { table_name, column_names, where_clause } => write!(f, "{}", where_clause),
             Expr::Table {records , ..} => {
                 write!(f, "[",)?;

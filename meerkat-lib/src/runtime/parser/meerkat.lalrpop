@@ -87,6 +87,9 @@ Stmt: Stmt = {
     "@test" "(" <i:Ident> ")" "{" <astmts: ActionStmts> "}" => {
         Stmt::Test { service: i, stmts: astmts }
     },
+    "import" <i:Ident> => {
+        Stmt::Import { path: format!("{}.mkt", i), service: i }
+    },
 }
 
 ActionStmts: Vec<ActionStmt> = ActionStmt*;
@@ -169,6 +172,8 @@ SubExpr: Expr = {
     
     <expr:SubExpr> "(" <args:Args> ")" => 
         Expr::Call { func: Box::new(expr), args },
+
+    <s:Ident> "." <m:Ident> => Expr::MemberAccess { service: s, member: m },
 
     "action" "{" <stmts: ActionStmts> "}" => Expr::Action(stmts),
 }

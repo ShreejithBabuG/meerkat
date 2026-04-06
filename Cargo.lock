@@ -2196,6 +2196,7 @@ dependencies = [
  "env_logger",
  "log",
  "meerkat-lib",
+ "serde_json",
  "tokio",
 ]
 

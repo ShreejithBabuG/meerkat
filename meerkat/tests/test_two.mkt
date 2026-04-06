@@ -5,7 +5,7 @@ service s1 {
 }
 
 service s2 {
-    pub def inc_delegate = fn n => s1.inc_x(n);
+    pub def inc_delegate = fn n => s1.inc_x;
     var w = s1.y - 2;
     pub def z = s1.y * 2;
 }
@@ -16,4 +16,3 @@ service s2 {
     do inc_delegate(1);
     assert(z==4);
 }
-

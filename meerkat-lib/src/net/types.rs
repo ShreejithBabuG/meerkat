@@ -40,6 +40,40 @@ pub enum MeerkatMessage {
         var_id: u64,
         new_value: Vec<u8>,
     },
+
+    /// Request to look up a member of a service on a remote node
+    LookupRequest {
+        request_id: u64,
+        service: String,
+        member: String,
+        reply_to: String,  // full multiaddr of the requester
+    },
+
+    /// Response to a LookupRequest with the serialized value
+    LookupResponse {
+        request_id: u64,
+        value: String,  // JSON-serialized Value
+    },
+
+    /// Response indicating lookup failed
+    LookupError {
+        request_id: u64,
+        error: String,
+    },
+
+    /// Execute an action on a remote service
+    ActionRequest {
+        request_id: u64,
+        service: String,
+        member: String,  // name of the action def to execute
+    },
+
+    /// Response to ActionRequest
+    ActionResponse {
+        request_id: u64,
+        success: bool,
+        error: Option<String>,
+    },
 }
 
 /// Errors that can occur when sending

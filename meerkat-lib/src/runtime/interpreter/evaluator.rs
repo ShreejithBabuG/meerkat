@@ -108,7 +108,12 @@ pub async fn eval(
             let var_binded: HashSet<String> = params.iter().cloned().collect();
             let free_vars = body.free_var(&HashSet::new(), &var_binded);
             let captured_env: Vec<(String, Value)> = env.iter()
-                .filter(|(name, _)| free_vars.contains(name))
+                .filter(|(name, _)| {
+                    free_vars.contains(name) &&
+                    !ctx.manager.services.get(ctx.service_name)
+                        .map(|s| s.vars.contains_key(name.as_str()) || s.defs.contains_key(name.as_str()))
+                        .unwrap_or(false)
+                })
                 .cloned()
                 .collect();
             Ok(Value::Closure {
@@ -119,13 +124,30 @@ pub async fn eval(
         }
 
         Expr::Action(stmts) => {
-            // TODO: optimize by computing free vars for ActionStmt
+            // Use free_var on the Action expression itself to find free variables
+            // Service vars/defs are looked up fresh via the manager at execution time
+            let action_expr = Expr::Action(stmts.clone());
+            let free_vars = action_expr.free_var(&std::collections::HashSet::new(), &std::collections::HashSet::new());
+            let captured_env: Vec<(String, Value)> = env.iter()
+                .filter(|(name, _)| {
+                    free_vars.contains(name) &&
+                    !ctx.manager.services.get(ctx.service_name)
+                        .map(|s| s.vars.contains_key(name.as_str()) || s.defs.contains_key(name.as_str()))
+                        .unwrap_or(false)
+                })
+                .cloned()
+                .collect();
             Ok(Value::ActionClosure {
                 stmts: stmts.clone(),
-                env: env.to_vec(),
+                env: captured_env,
+                service_name: ctx.service_name.to_string(),
             })
         }
 
+        Expr::MemberAccess { service, member } => {
+            // Manager figures out whether service is local or remote
+            ctx.manager.lookup(member, service).await
+        }
         _ => Err(EvalError::NotImplemented),
     }
 }
@@ -190,7 +212,7 @@ mod tests {
         ]);
         let result = eval(&action_expr, &[], &mut ctx).await.unwrap();
         match result {
-            Value::ActionClosure { stmts, env: _ } => assert_eq!(stmts.len(), 1),
+            Value::ActionClosure { stmts, .. } => assert_eq!(stmts.len(), 1),
             _ => panic!("Expected ActionClosure"),
         }
     }
