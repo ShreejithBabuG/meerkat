@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use super::ast::{Value, Decl, Expr, ActionStmt};
-use super::interpreter::{eval, EvalContext, EvalError};
+use super::interpreter::{eval, EvalContext, EvalError, execute};
 use super::semantic_analysis::var_analysis::{calc_dep_srv, DependAnalysis};
 use crate::net::{Address, NetworkCommand, NetworkEvent, MeerkatMessage, NetworkActor};
 use crate::net::network_layer::NetworkLayer;
@@ -154,48 +154,6 @@ impl Manager {
         Ok(())
     }
 
-    #[async_recursion::async_recursion]
-    pub async fn execute_action_stmt(&mut self, stmt: &ActionStmt, env: &[(String, Value)], service_name: &str) -> Result<(), EvalError> {
-        match stmt {
-            ActionStmt::Assign { var, expr } => {
-                let value = eval(expr, env, &mut EvalContext { manager: self, service_name }).await?;
-                self.assign(service_name, var, value).await
-            }
-            ActionStmt::Do(expr) => {
-                let val = eval(expr, env, &mut EvalContext { manager: self, service_name }).await?;
-                match val {
-                    Value::ActionClosure { stmts, env: closure_env, service_name: action_svc } => {
-                        if self.remote_services.contains_key(&action_svc) {
-                            // Execute action remotely
-                            self.remote_action(&action_svc, stmts, closure_env).await?;
-                            // Heuristic delay to allow remote propagation to complete
-                            tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
-                        } else {
-                            // Execute locally
-                            for s in &stmts {
-                                self.execute_action_stmt(s, &closure_env, &action_svc).await?;
-                            }
-                        }
-                        Ok(())
-                    }
-                    _ => Err(EvalError::TypeError("do expects an action".to_string())),
-                }
-            }
-            ActionStmt::Assert(expr) => {
-                let val = eval(expr, env, &mut EvalContext { manager: self, service_name }).await?;
-                match val {
-                    Value::Bool { val: true } => Ok(()),
-                    Value::Bool { val: false } => Err(EvalError::TypeError("Assertion failed".to_string())),
-                    _ => Err(EvalError::TypeError("assert expects a boolean".to_string())),
-                }
-            }
-            ActionStmt::Let { name: _, expr } => {
-                let _val = eval(expr, env, &mut EvalContext { manager: self, service_name }).await?;
-                Ok(())
-            }
-            ActionStmt::Insert { .. } => Err(EvalError::NotImplemented),
-        }
-    }
 
     /// Get the network address for a remote service (strips the slug)
     fn remote_addr(&self, service: &str) -> Result<Address, EvalError> {
@@ -206,6 +164,7 @@ impl Manager {
     }
 
     /// Get our local address with peer ID for use as reply_to
+    /// Replaces loopback/unspecified with the actual outbound IP
     async fn local_reply_addr(&mut self) -> String {
         let net = match self.network.as_mut() {
             Some(n) => n,
@@ -213,16 +172,29 @@ impl Manager {
         };
         let peer_id = net.local_peer_id();
         let reply = net.handle_command(NetworkCommand::GetLocalAddresses).await;
+        let public_ip = Self::get_public_ip();
         match reply {
             crate::net::NetworkReply::LocalAddresses { addrs } => {
                 if let Some(addr) = addrs.first() {
-                    format!("{}/p2p/{}", addr.0, peer_id)
+                    let addr_str = addr.0
+                        .replace("0.0.0.0", &public_ip)
+                        .replace("127.0.0.1", &public_ip);
+                    format!("{}/p2p/{}", addr_str, peer_id)
                 } else {
                     String::new()
                 }
             }
             _ => String::new(),
         }
+    }
+
+    /// Get the local machine's outbound IP address (non-loopback)
+    pub fn get_public_ip() -> String {
+        use std::net::UdpSocket;
+        UdpSocket::bind("0.0.0.0:0")
+            .and_then(|s| { s.connect("8.8.8.8:80")?; s.local_addr() })
+            .map(|addr| addr.ip().to_string())
+            .unwrap_or_else(|_| "127.0.0.1".to_string())
     }
 
     pub async fn remote_lookup(&mut self, service: &str, member: &str) -> Result<Value, EvalError> {
@@ -331,7 +303,7 @@ impl Manager {
 
     pub async fn run_test_with_env(&mut self, service_name: &str, stmts: &[ActionStmt], env: &[(String, Value)]) -> Result<(), EvalError> {
         for stmt in stmts {
-            self.execute_action_stmt(stmt, env, service_name).await?;
+            execute(stmt, env, self, service_name).await?;
         }
         Ok(())
     }
