@@ -50,13 +50,13 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
     }
 
     if args.server {
-        run_server(prog).await
+        run_server(prog, remote_url_map).await
     } else {
         run_client(prog, &args.input_file, remote_url_map).await
     }
 }
 
-async fn run_server(prog: Vec<Stmt>) -> Result<(), Box<dyn Error>> {
+async fn run_server(prog: Vec<Stmt>, remote_url_map: std::collections::HashMap<String, String>) -> Result<(), Box<dyn Error>> {
     let mut manager = Manager::new();
 
     // Load services
@@ -73,6 +73,7 @@ async fn run_server(prog: Vec<Stmt>) -> Result<(), Box<dyn Error>> {
         .map_err(|e| format!("Network error: {}", e))?;
 
     // Listen
+    let public_ip = meerkat_lib::runtime::Manager::get_public_ip();
     let listen_addr = Address::new("/ip4/0.0.0.0/tcp/9000");
     let reply = net.handle_command(NetworkCommand::Listen { addr: listen_addr }).await;
     let actual_addr = match reply {
@@ -82,7 +83,11 @@ async fn run_server(prog: Vec<Stmt>) -> Result<(), Box<dyn Error>> {
     };
 
     let peer_id = net.local_peer_id();
-    let full_addr = format!("{}/p2p/{}", actual_addr.0, peer_id);
+    // Replace loopback/unspecified with actual public IP
+    let actual_addr_str = actual_addr.0
+        .replace("0.0.0.0", &public_ip)
+        .replace("127.0.0.1", &public_ip);
+    let full_addr = format!("{}/p2p/{}", actual_addr_str, peer_id);
     println!("Server listening at: {}", full_addr);
 
     // Print service URLs
@@ -92,12 +97,22 @@ async fn run_server(prog: Vec<Stmt>) -> Result<(), Box<dyn Error>> {
         }
     }
 
+    // Register any remote services from -i flags
+    for (svc_name, url) in &remote_url_map {
+        manager.remote_services.insert(svc_name.clone(), Address::new(url.as_str()));
+        println!("Remote service '{}' registered at {}", svc_name, url);
+    }
+
+    // Wire network into manager so server can also do remote lookups
+    manager.network = Some(net);
+
     println!("Server running, press Ctrl+C to stop...");
 
     loop {
-        if let Some(event) = net.try_recv_event() {
+        let event = manager.network.as_mut().and_then(|n| n.try_recv_event());
+        if let Some(event) = event {
             match event {
-                NetworkEvent::MessageReceived { peer, msg } => {
+                NetworkEvent::MessageReceived { peer: _, msg } => {
                     match msg {
                         MeerkatMessage::LookupRequest { request_id, service, member, reply_to } => {
                             let result = manager.lookup(&member, &service).await;
@@ -111,32 +126,26 @@ async fn run_server(prog: Vec<Stmt>) -> Result<(), Box<dyn Error>> {
                                     error: e.to_string(),
                                 },
                             };
-                            net.handle_command(NetworkCommand::SendMessage {
-                                addr: Address::new(&reply_to),
-                                msg: response,
-                            }).await;
+                            if let Some(net) = manager.network.as_mut() {
+                                net.handle_command(NetworkCommand::SendMessage {
+                                    addr: Address::new(&reply_to),
+                                    msg: response,
+                                }).await;
+                            }
                         }
-                        MeerkatMessage::ActionRequest { request_id, service, member } => {
-                            let result = manager.lookup(&member, &service).await;
-                            let response = match result {
-                                Ok(meerkat_lib::runtime::ast::Value::ActionClosure { stmts, service_name, .. }) => {
-                                    let exec = manager.run_test(&service_name, &stmts).await;
-                                    MeerkatMessage::ActionResponse {
-                                        request_id,
-                                        success: exec.is_ok(),
-                                        error: exec.err().map(|e| e.to_string()),
-                                    }
-                                }
-                                _ => MeerkatMessage::ActionResponse {
-                                    request_id,
-                                    success: false,
-                                    error: Some(format!("'{}' is not an action", member)),
-                                },
+                        MeerkatMessage::ActionRequest { request_id, service, stmts, env: action_env, reply_to } => {
+                            let result = manager.run_test_with_env(&service, &stmts, &action_env).await;
+                            let response = MeerkatMessage::ActionResponse {
+                                request_id,
+                                success: result.is_ok(),
+                                error: result.err().map(|e| e.to_string()),
                             };
-                            net.handle_command(NetworkCommand::SendMessage {
-                                addr: Address::new(&peer),
-                                msg: response,
-                            }).await;
+                            if let Some(net) = manager.network.as_mut() {
+                                net.handle_command(NetworkCommand::SendMessage {
+                                    addr: Address::new(&reply_to),
+                                    msg: response,
+                                }).await;
+                            }
                         }
                         _ => {}
                     }

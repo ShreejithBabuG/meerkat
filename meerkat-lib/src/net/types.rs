@@ -65,7 +65,9 @@ pub enum MeerkatMessage {
     ActionRequest {
         request_id: u64,
         service: String,
-        member: String,  // name of the action def to execute
+        stmts: Vec<crate::ast::ActionStmt>,
+        env: Vec<(String, crate::ast::Value)>,
+        reply_to: String,
     },
 
     /// Response to ActionRequest
