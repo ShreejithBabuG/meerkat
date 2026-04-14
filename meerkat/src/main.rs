@@ -1,3 +1,5 @@
+mod repl;
+
 use clap::Parser;
 use std::error::Error;
 use meerkat_lib::runtime::ast::Stmt;
@@ -10,8 +12,9 @@ use meerkat_lib::net::network_layer::NetworkLayer;
 #[derive(Parser, Debug)]
 #[command(author, version, about)]
 struct Args {
-    #[arg(short = 'f', long = "file", default_value = "test0.meerkat")]
-    input_file: String,
+    /// Input file to run. Omit to launch the interactive REPL.
+    #[arg(short = 'f', long = "file")]
+    input_file: Option<String>,
 
     #[arg(short = 'v', long = "verbose", default_value_t = false)]
     verbose: bool,
@@ -38,9 +41,6 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
         .filter_level(log_level)
         .init();
 
-    let prog = meerkat_lib::runtime::parser::parser::parse_file(&args.input_file)
-        .map_err(|e| format!("Parse error: {}", e))?;
-
     // Build slug -> remote address map from -i flags
     let mut remote_url_map: std::collections::HashMap<String, String> = std::collections::HashMap::new();
     for url in &args.import_urls {
@@ -49,10 +49,23 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
         }
     }
 
-    if args.server {
-        run_server(prog, remote_url_map).await
-    } else {
-        run_client(prog, &args.input_file, remote_url_map).await
+    match args.input_file {
+        Some(ref file) => {
+            let prog = meerkat_lib::runtime::parser::parser::parse_file(file)
+                .map_err(|e| format!("Parse error: {}", e))?;
+
+            if args.server {
+                run_server(prog, remote_url_map).await
+            } else {
+                run_client(prog, file, remote_url_map).await
+            }
+        }
+        None => {
+            if args.server {
+                return Err("-s/--server requires a file (-f). Pass a .mkt file containing the services to host.".into());
+            }
+            repl::run_repl(Manager::new(), remote_url_map).await
+        }
     }
 }
 
