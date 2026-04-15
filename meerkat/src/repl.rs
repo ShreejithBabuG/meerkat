@@ -21,6 +21,15 @@ pub async fn run_repl(
         println!();
     }
 
+    // Start network actor if we have remote imports, same as run_client
+    if !remote_url_map.is_empty() {
+        let mut n = meerkat_lib::net::NetworkActor::new(meerkat_lib::net::types::NodeType::Server).await
+            .map_err(|e| format!("Network error: {}", e))?;
+        let listen_addr = meerkat_lib::net::Address::new("/ip4/0.0.0.0/tcp/0");
+        n.handle_command(meerkat_lib::net::NetworkCommand::Listen { addr: listen_addr }).await;
+        manager.network = Some(n);
+    }
+
     let mut buffer = String::new();
     let mut continuation = false;
     let mut lines = stdin.lock().lines();
