@@ -58,7 +58,7 @@ fn skip_multi_line_comments<'b>(lex: &mut Lexer<'b, Token<'b>>) -> Skip {
                         balanced_comments += 1;
                     }
                 }
-                None => panic!("Reached end of file"),
+                None => break,
                 _ => {
                     lex.bump_unchecked(1);
                 }
