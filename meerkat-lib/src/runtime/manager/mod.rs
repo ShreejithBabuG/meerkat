@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use super::ast::{Value, Decl, Expr, ActionStmt};
-use super::interpreter::{eval, EvalContext, EvalError, execute};
+use super::interpreter::{eval, EvalContext, EvalError, execute, ExecuteEffect};
 use super::semantic_analysis::var_analysis::{calc_dep_srv, DependAnalysis};
 use crate::net::{Address, NetworkCommand, NetworkEvent, MeerkatMessage, NetworkActor};
 use crate::net::network_layer::NetworkLayer;
@@ -301,9 +301,13 @@ impl Manager {
         self.run_test_with_env(service_name, stmts, &[]).await
     }
 
-    pub async fn run_test_with_env(&mut self, service_name: &str, stmts: &[ActionStmt], env: &[(String, Value)]) -> Result<(), EvalError> {
+    pub async fn run_test_with_env(&mut self, service_name: &str, stmts: &[ActionStmt], initial_env: &[(String, Value)]) -> Result<(), EvalError> {
+        let mut env: Vec<(String, Value)> = initial_env.to_vec();
         for stmt in stmts {
-            execute(stmt, env, self, service_name).await?;
+            match execute(stmt, &env, self, service_name).await? {
+                ExecuteEffect::Binding(name, val) => env.push((name, val)),
+                ExecuteEffect::None | ExecuteEffect::ExprValue(_) => {}
+            }
         }
         Ok(())
     }

@@ -28,6 +28,7 @@ pub enum ActionStmt {
         name: String,
         expr: Expr,
     },
+    Expr(Expr),
     Do(Expr),
     Assert(Expr),
     Assign {
@@ -273,6 +274,7 @@ impl Display for ActionStmt {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             ActionStmt::Let { name, expr } => write!(f, "let {} = {}", name, expr),
+            ActionStmt::Expr(expr) => write!(f, "{}", expr),
             ActionStmt::Do(expr) => write!(f, "do {}", expr),
             ActionStmt::Assert(expr) => write!(f, "assert {}", expr),
             ActionStmt::Assign { var, expr } => write!(f, "{} = {}", var, expr),

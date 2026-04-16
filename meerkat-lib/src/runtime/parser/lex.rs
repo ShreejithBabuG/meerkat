@@ -186,7 +186,8 @@ pub enum Token<'a> {
   STRING_KW,
   #[token("bool")]
   BOOL_KW,
-  
+  #[token("let")]
+  LET_KW,
 
     #[regex(r"\s*", logos::skip)]
     #[regex(r#"(//)[^\n]*"#, logos::skip)] // Regex for a single line comment

@@ -69,6 +69,9 @@ impl Expr {
                         ActionStmt::Let { name: _, expr } => {
                             free_vars.extend(expr.free_var(reactive_names, var_binded));
                         }
+                        ActionStmt::Expr(expr) => {
+                            free_vars.extend(expr.free_var(reactive_names, var_binded));
+                        }
                         ActionStmt::Insert { row, .. } => {
                             free_vars.extend(row.free_var(reactive_names, var_binded));
                         }
