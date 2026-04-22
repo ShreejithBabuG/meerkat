@@ -1,6 +1,7 @@
 use std::io::{self, BufRead, IsTerminal, Write};
 
-use meerkat_lib::runtime::ast::Stmt;
+use meerkat_lib::runtime::ast::{Stmt, Value};
+use meerkat_lib::runtime::interpreter::{execute, ExecuteEffect};
 use meerkat_lib::runtime::parser::ReplParseResult;
 use meerkat_lib::runtime::parser::parser::{parse_file, parse_repl};
 use meerkat_lib::runtime::Manager;
@@ -17,11 +18,10 @@ pub async fn run_repl(
 
     if is_tty {
         println!("Meerkat REPL  (Ctrl-D to exit)");
-        println!("Enter service definitions, @test blocks, or import statements.");
+        println!("Enter service definitions, @test blocks, statements, or expressions.");
         println!();
     }
 
-    // Start network actor if we have remote imports, same as run_client
     if !remote_url_map.is_empty() {
         let mut n = meerkat_lib::net::NetworkActor::new(meerkat_lib::net::types::NodeType::Server).await
             .map_err(|e| format!("Network error: {}", e))?;
@@ -29,6 +29,9 @@ pub async fn run_repl(
         n.handle_command(meerkat_lib::net::NetworkCommand::Listen { addr: listen_addr }).await;
         manager.network = Some(n);
     }
+
+    // Persistent environment for let bindings across REPL inputs
+    let mut repl_env: Vec<(String, Value)> = Vec::new();
 
     let mut buffer = String::new();
     let mut continuation = false;
@@ -70,7 +73,7 @@ pub async fn run_repl(
             }
             ReplParseResult::Complete(stmts) => {
                 for stmt in stmts {
-                    match exec_stmt(stmt, &mut manager, &remote_url_map).await {
+                    match exec_stmt(stmt, &mut manager, &mut repl_env, &remote_url_map).await {
                         Ok(Some(output)) => println!("{}", output),
                         Ok(None) => {}
                         Err(e) => eprintln!("Error: {}", e),
@@ -91,6 +94,7 @@ pub async fn run_repl(
 async fn exec_stmt(
     stmt: Stmt,
     manager: &mut Manager,
+    repl_env: &mut Vec<(String, Value)>,
     remote_url_map: &std::collections::HashMap<String, String>,
 ) -> Result<Option<String>, Box<dyn std::error::Error>> {
     match stmt {
@@ -125,6 +129,19 @@ async fn exec_stmt(
                 }
             }
             Ok(Some(format!("Imported service(s): {}.", loaded.join(", "))))
+        }
+        Stmt::ActionStmt(action_stmt) => {
+            let effect = execute(&action_stmt, repl_env, manager, "")
+                .await
+                .map_err(|e| format!("{}", e))?;
+            match effect {
+                ExecuteEffect::Binding(name, val) => {
+                    repl_env.push((name, val));
+                    Ok(None)
+                }
+                ExecuteEffect::ExprValue(val) => Ok(Some(val.to_string())),
+                ExecuteEffect::None => Ok(None),
+            }
         }
         other => {
             Ok(Some(format!(

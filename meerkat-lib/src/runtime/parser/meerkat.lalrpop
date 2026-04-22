@@ -41,6 +41,7 @@ extern {
         "number" => Token::NUMBER_KW,
         "string" => Token::STRING_KW,
         "bool" => Token::BOOL_KW,
+        "let" => Token::LET_KW,
         ";" => Token::Semicolon,
         "." => Token::Dot,
         "=" => Token::Assgn,
@@ -90,11 +91,13 @@ Stmt: Stmt = {
     "import" <i:Ident> => {
         Stmt::Import { path: format!("{}.mkt", i), service: i }
     },
+    <a:ActionStmt> => Stmt::ActionStmt(a),
 }
 
 ActionStmts: Vec<ActionStmt> = ActionStmt*;
 
 ActionStmt: ActionStmt = {
+    "let" <i:Ident> "=" <e:Expr> ";" => ActionStmt::Let { name: i, expr: e },
     "do" <e: Expr> ";" => {
         ActionStmt::Do(e)
     },
@@ -104,7 +107,8 @@ ActionStmt: ActionStmt = {
     "insert"  <e: Expr> "into" <t: Ident> => {
         ActionStmt::Insert {row: e, table_name: t}
     },
-    <i:Ident> "=" <e:Expr> ";" => ActionStmt::Assign { var: i, expr: e }
+    <i:Ident> "=" <e:Expr> ";" => ActionStmt::Assign { var: i, expr: e },
+    <e:Expr> ";" => ActionStmt::Expr(e),
 }
 
 Decl: Decl = {

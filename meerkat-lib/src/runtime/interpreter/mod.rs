@@ -4,3 +4,4 @@ pub use evaluator::eval;
 pub use evaluator::EvalContext;
 pub use evaluator::EvalError;
 pub use executor::execute;
+pub use executor::ExecuteEffect;
