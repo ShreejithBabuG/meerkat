@@ -188,6 +188,8 @@ pub enum Token<'a> {
   BOOL_KW,
   #[token("let")]
   LET_KW,
+  #[token("watch")]
+  WATCH_KW,
 
     #[regex(r"\s*", logos::skip)]
     #[regex(r#"(//)[^\n]*"#, logos::skip)] // Regex for a single line comment

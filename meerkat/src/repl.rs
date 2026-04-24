@@ -1,13 +1,44 @@
 use std::io::{self, BufRead, IsTerminal, Write};
 
-use meerkat_lib::runtime::ast::{Stmt, Value};
-use meerkat_lib::runtime::interpreter::{execute, ExecuteEffect};
+use meerkat_lib::runtime::ast::{Expr, Stmt, Value};
+use meerkat_lib::runtime::interpreter::{eval, execute, EvalContext, ExecuteEffect};
 use meerkat_lib::runtime::parser::ReplParseResult;
 use meerkat_lib::runtime::parser::parser::{parse_file, parse_repl};
 use meerkat_lib::runtime::Manager;
 
 const PROMPT: &str = "meerkat> ";
 const PROMPT_CONT: &str = "       > ";
+
+/// A registered watch: the original source text, the expression, and its last known value.
+struct Watch {
+    label: String,
+    expr: Expr,
+    last: Option<Value>,
+}
+
+/// Re-evaluate all watches and print any that have changed.
+async fn check_watches(watches: &mut Vec<Watch>, manager: &mut Manager, repl_env: &[(String, Value)]) {
+    for w in watches.iter_mut() {
+        let result = eval(
+            &w.expr,
+            repl_env,
+            &mut EvalContext { manager, service_name: "" },
+        ).await;
+        match result {
+            Ok(new_val) => {
+                let changed = w.last.as_ref().map_or(true, |old| old != &new_val);
+                if changed {
+                    match &w.last {
+                        None    => println!("[watch] {} = {}", w.label, new_val),
+                        Some(old) => println!("[watch] {}: {} => {}", w.label, old, new_val),
+                    }
+                    w.last = Some(new_val);
+                }
+            }
+            Err(e) => eprintln!("[watch] {}: error: {}", w.label, e),
+        }
+    }
+}
 
 pub async fn run_repl(
     mut manager: Manager,
@@ -30,8 +61,8 @@ pub async fn run_repl(
         manager.network = Some(n);
     }
 
-    // Persistent environment for let bindings across REPL inputs
     let mut repl_env: Vec<(String, Value)> = Vec::new();
+    let mut watches: Vec<Watch> = Vec::new();
 
     let mut buffer = String::new();
     let mut continuation = false;
@@ -56,9 +87,11 @@ pub async fn run_repl(
         buffer.push_str(&line);
         buffer.push('\n');
 
+        // Empty line: just check watches and re-prompt
         if buffer.trim().is_empty() {
             buffer.clear();
             continuation = false;
+            check_watches(&mut watches, &mut manager, &repl_env).await;
             continue;
         }
 
@@ -73,12 +106,14 @@ pub async fn run_repl(
             }
             ReplParseResult::Complete(stmts) => {
                 for stmt in stmts {
-                    match exec_stmt(stmt, &mut manager, &mut repl_env, &remote_url_map).await {
+                    match exec_stmt(stmt, &mut manager, &mut repl_env, &mut watches, &remote_url_map).await {
                         Ok(Some(output)) => println!("{}", output),
                         Ok(None) => {}
                         Err(e) => eprintln!("Error: {}", e),
                     }
                 }
+                // Check watches after every complete input
+                check_watches(&mut watches, &mut manager, &repl_env).await;
                 buffer.clear();
                 continuation = false;
             }
@@ -95,6 +130,7 @@ async fn exec_stmt(
     stmt: Stmt,
     manager: &mut Manager,
     repl_env: &mut Vec<(String, Value)>,
+    watches: &mut Vec<Watch>,
     remote_url_map: &std::collections::HashMap<String, String>,
 ) -> Result<Option<String>, Box<dyn std::error::Error>> {
     match stmt {
@@ -142,6 +178,21 @@ async fn exec_stmt(
                 ExecuteEffect::ExprValue(val) => Ok(Some(val.to_string())),
                 ExecuteEffect::None => Ok(None),
             }
+        }
+        Stmt::Watch { expr } => {
+            let label = format!("{}", expr);
+            // Evaluate initial value
+            let initial = eval(
+                &expr,
+                repl_env,
+                &mut EvalContext { manager, service_name: "" },
+            ).await.ok();
+            let msg = match &initial {
+                Some(v) => format!("Watching: {} (current value: {})", label, v),
+                None    => format!("Watching: {} (not yet available)", label),
+            };
+            watches.push(Watch { label, expr, last: initial });
+            Ok(Some(msg))
         }
         other => {
             Ok(Some(format!(

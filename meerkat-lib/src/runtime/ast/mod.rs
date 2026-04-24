@@ -49,6 +49,7 @@ pub enum Stmt {
     Import { path: String, service: String },
     Service { name: String, decls: Vec<Decl> },
     Test { service: String, stmts: Vec<ActionStmt> },
+    Watch { expr: Expr },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]

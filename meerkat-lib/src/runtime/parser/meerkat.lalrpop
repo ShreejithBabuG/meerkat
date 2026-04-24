@@ -42,6 +42,7 @@ extern {
         "string" => Token::STRING_KW,
         "bool" => Token::BOOL_KW,
         "let" => Token::LET_KW,
+        "watch" => Token::WATCH_KW,
         ";" => Token::Semicolon,
         "." => Token::Dot,
         "=" => Token::Assgn,
@@ -92,6 +93,7 @@ Stmt: Stmt = {
         Stmt::Import { path: format!("{}.mkt", i), service: i }
     },
     <a:ActionStmt> => Stmt::ActionStmt(a),
+    "watch" <e:Expr> ";" => Stmt::Watch { expr: e },
 }
 
 ActionStmts: Vec<ActionStmt> = ActionStmt*;
