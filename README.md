@@ -22,6 +22,15 @@ cargo test
 
 # Test WASM compatibility
 cargo build -p meerkat-net --target wasm32-unknown-unknown
+
+# Run the REPL
+cargo run
+
+# Run a simple example network-accessible service; prints a URL to connect to
+cargo run -- -s -f meerkat/tests/s1.mkt
+
+# Connect to a remote service and run tests
+cargo run -- -f meerkat/tests/test_client.mkt -i "<Service URL>"
 ```
 
 ## License
