@@ -49,12 +49,12 @@ pub async fn eval(
                 arg_vals.push(eval(arg, env, ctx).await?);
             }
             match func_val {
-                Value::Closure { params, body, env: closure_env } => {
+                Value::Closure { params, body, env: closure_env, service_name: closure_svc } => {
                     let mut new_env = closure_env.clone();
                     for (param, arg_val) in params.iter().zip(arg_vals) {
                         new_env.push((param.clone(), arg_val));
                     }
-                    eval(&body, &new_env, ctx).await
+                    eval(&body, &new_env, &mut EvalContext { manager: ctx.manager, service_name: &closure_svc }).await
                 }
                 _ => Err(EvalError::TypeError("Attempting to call a non-function value".to_string())),
             }
@@ -120,6 +120,7 @@ pub async fn eval(
                 params: params.clone(),
                 body: body.clone(),
                 env: captured_env,
+                service_name: ctx.service_name.to_string(),
             })
         }
 

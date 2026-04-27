@@ -67,6 +67,7 @@ pub enum Value {
         params: Vec<String>,
         body: Box<Expr>,
         env: Vec<(String, Value)>,
+        service_name: String,
     },
     ActionClosure {
         stmts: Vec<ActionStmt>,
@@ -206,7 +207,7 @@ impl Display for Value {
             Value::Number { val } => write!(f, "{}", val),
             Value::Bool { val } => write!(f, "{}", val),
             Value::String { val } => write!(f, "\"{}\"", val),
-            Value::Closure { params, body, env } =>
+            Value::Closure { params, body, env, service_name } =>
                 write!(f, "fn({})[{:?}]{{{}}}", params.join(","), env, body),
             Value::ActionClosure { stmts, env, service_name } =>
                 write!(f, "action[{:?}][{}]{{{:?}}}", env, service_name, stmts),  
