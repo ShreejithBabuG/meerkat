@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use tokio::sync::oneshot;
+use tokio::time::Duration;
 use super::ast::{Value, Decl, Expr, ActionStmt};
 use super::interpreter::{eval, EvalContext, EvalError, execute, ExecuteEffect};
 use super::semantic_analysis::var_analysis::{calc_dep_srv, DependAnalysis};
@@ -187,6 +188,52 @@ impl Manager {
         }
     }
 
+    /// Send a message and await a reply using tokio::select! for timeout.
+    /// Encapsulates the duplicated send + register channel + await pattern
+    /// shared by remote_lookup and remote_action.
+    async fn send_and_await_reply(
+        &mut self,
+        addr: Address,
+        msg: MeerkatMessage,
+        request_id: u64,
+        timeout_msg: String,
+    ) -> Result<MeerkatMessage, EvalError> {
+        // Send the message
+        let net = self.network.as_mut()
+            .ok_or_else(|| EvalError::NetworkError("No network layer available".to_string()))?;
+        net.handle_command(NetworkCommand::SendMessage { addr, msg }).await;
+
+        // Register oneshot channel for this request
+        let (tx, mut rx) = oneshot::channel::<MeerkatMessage>();
+        self.pending_replies.insert(request_id, tx);
+
+        // Use tokio::select! with a pinned timeout future so it is not
+        // reset each iteration. Each iteration dispatches pending network
+        // events before selecting, so replies arrive as soon as possible.
+        let timeout = tokio::time::sleep(Duration::from_secs(15));
+        tokio::pin!(timeout);
+
+        loop {
+            self.dispatch_network_events();
+            tokio::select! {
+                biased;
+                // Reply arrived via oneshot channel
+                result = &mut rx => {
+                    return result.map_err(|_| {
+                        EvalError::NetworkError("Reply channel closed".to_string())
+                    });
+                }
+                // Timeout expired
+                _ = &mut timeout => {
+                    self.pending_replies.remove(&request_id);
+                    return Err(EvalError::NetworkError(timeout_msg));
+                }
+                // Yield for 10ms then dispatch again
+                _ = tokio::time::sleep(Duration::from_millis(10)) => {}
+            }
+        }
+    }
+
     /// Get the network address for a remote service (strips the slug)
     fn remote_addr(&self, service: &str) -> Result<Address, EvalError> {
         let full_url = self.remote_services.get(service)
@@ -244,41 +291,21 @@ impl Manager {
             reply_to,
         };
 
-        let net = self.network.as_mut()
-            .ok_or_else(|| EvalError::NetworkError("No network layer available".to_string()))?;
+        let reply = self.send_and_await_reply(
+            addr, msg, request_id,
+            format!("Timeout waiting for remote lookup of {}.{}", service, member),
+        ).await?;
 
-        net.handle_command(NetworkCommand::SendMessage { addr, msg }).await;
-
-        // Create oneshot channel and register it
-        let (tx, mut rx) = oneshot::channel::<MeerkatMessage>();
-        self.pending_replies.insert(request_id, tx);
-
-        // Await reply with timeout, dispatching network events each iteration
-        let deadline = tokio::time::Instant::now() + tokio::time::Duration::from_secs(15);
-        loop {
-            if tokio::time::Instant::now() >= deadline {
-                self.pending_replies.remove(&request_id);
-                return Err(EvalError::NetworkError(format!(
-                    "Timeout waiting for remote lookup of {}.{}", service, member
-                )));
+        match reply {
+            MeerkatMessage::LookupResponse { value, .. } => {
+                let val: Value = serde_json::from_str(&value)
+                    .map_err(|e| EvalError::NetworkError(e.to_string()))?;
+                Ok(val)
             }
-            self.dispatch_network_events();
-            match rx.try_recv() {
-                Ok(MeerkatMessage::LookupResponse { value, .. }) => {
-                    let val: Value = serde_json::from_str(&value)
-                        .map_err(|e| EvalError::NetworkError(e.to_string()))?;
-                    return Ok(val);
-                }
-                Ok(MeerkatMessage::LookupError { error, .. }) => {
-                    return Err(EvalError::LookupError(error));
-                }
-                Ok(_) => {}
-                Err(oneshot::error::TryRecvError::Empty) => {}
-                Err(oneshot::error::TryRecvError::Closed) => {
-                    return Err(EvalError::NetworkError("Reply channel closed".to_string()));
-                }
+            MeerkatMessage::LookupError { error, .. } => {
+                Err(EvalError::LookupError(error))
             }
-            tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
+            _ => Err(EvalError::NetworkError("Unexpected reply to lookup request".to_string())),
         }
     }
 
@@ -298,42 +325,22 @@ impl Manager {
             reply_to,
         };
 
-        let net = self.network.as_mut()
-            .ok_or_else(|| EvalError::NetworkError("No network layer available".to_string()))?;
+        let reply = self.send_and_await_reply(
+            addr, msg, request_id,
+            format!("Timeout waiting for remote action on service '{}'", service),
+        ).await?;
 
-        net.handle_command(NetworkCommand::SendMessage { addr, msg }).await;
-
-        // Create oneshot channel and register it
-        let (tx, mut rx) = oneshot::channel::<MeerkatMessage>();
-        self.pending_replies.insert(request_id, tx);
-
-        // Await reply with timeout, dispatching network events each iteration
-        let deadline = tokio::time::Instant::now() + tokio::time::Duration::from_secs(15);
-        loop {
-            if tokio::time::Instant::now() >= deadline {
-                self.pending_replies.remove(&request_id);
-                return Err(EvalError::NetworkError(format!(
-                    "Timeout waiting for remote action on service '{}'", service
-                )));
-            }
-            self.dispatch_network_events();
-            match rx.try_recv() {
-                Ok(MeerkatMessage::ActionResponse { success, error, .. }) => {
-                    if success {
-                        return Ok(());
-                    } else {
-                        return Err(EvalError::NetworkError(
-                            error.unwrap_or_else(|| "Remote action failed".to_string())
-                        ));
-                    }
-                }
-                Ok(_) => {}
-                Err(oneshot::error::TryRecvError::Empty) => {}
-                Err(oneshot::error::TryRecvError::Closed) => {
-                    return Err(EvalError::NetworkError("Reply channel closed".to_string()));
+        match reply {
+            MeerkatMessage::ActionResponse { success, error, .. } => {
+                if success {
+                    Ok(())
+                } else {
+                    Err(EvalError::NetworkError(
+                        error.unwrap_or_else(|| "Remote action failed".to_string())
+                    ))
                 }
             }
-            tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
+            _ => Err(EvalError::NetworkError("Unexpected reply to action request".to_string())),
         }
     }
 
