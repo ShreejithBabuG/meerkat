@@ -204,23 +204,30 @@ impl Manager {
         net.handle_command(NetworkCommand::SendMessage { addr, msg }).await;
 
         // Register oneshot channel for this request
-        let (tx, rx) = oneshot::channel::<MeerkatMessage>();
+        let (tx, mut rx) = oneshot::channel::<MeerkatMessage>();
         self.pending_replies.insert(request_id, tx);
 
-        // Use tokio::select! with no loop: whichever branch resolves first
-        // (reply or timeout) determines the result. dispatch_network_events
-        // is called before awaiting so any already-arrived reply is routed
-        // to the channel immediately.
-        self.dispatch_network_events();
-        tokio::select! {
-            result = rx => {
-                result.map_err(|_| {
-                    EvalError::NetworkError("Reply channel closed".to_string())
-                })
-            }
-            _ = tokio::time::sleep(Duration::from_secs(15)) => {
-                self.pending_replies.remove(&request_id);
-                Err(EvalError::NetworkError(timeout_msg))
+        // Loop with pinned timeout + tokio::select!. Each iteration dispatches
+        // pending network events then checks for reply, timeout, or yields 10ms.
+        // The loop is required until the tokio::join! background message loop
+        // architecture is implemented as a follow-up.
+        let timeout = tokio::time::sleep(Duration::from_secs(15));
+        tokio::pin!(timeout);
+
+        loop {
+            self.dispatch_network_events();
+            tokio::select! {
+                biased;
+                result = &mut rx => {
+                    return result.map_err(|_| {
+                        EvalError::NetworkError("Reply channel closed".to_string())
+                    });
+                }
+                _ = &mut timeout => {
+                    self.pending_replies.remove(&request_id);
+                    return Err(EvalError::NetworkError(timeout_msg));
+                }
+                _ = tokio::time::sleep(Duration::from_millis(10)) => {}
             }
         }
     }
