@@ -1,5 +1,5 @@
 use std::collections::{HashMap, HashSet};
-use crate::runtime::txn::{TxnId, VarLock};
+use crate::runtime::txn::{TxnId, VarState};
 use tokio::sync::oneshot;
 use tokio::time::Duration;
 use super::ast::{Value, Decl, Expr, ActionStmt};
@@ -10,13 +10,10 @@ use crate::net::network_layer::NetworkLayer;
 
 pub struct Service {
     pub name: String,
-    pub vars: HashMap<String, Value>,   // vars + evaluated def values
+    /// Per-variable state: value, lock, and latest write transaction in one place
+    pub vars: HashMap<String, VarState>,
     pub defs: HashMap<String, Expr>,    // original def expressions for re-evaluation
     pub dep: DependAnalysis,            // dependency graph + topo order
-    /// Per-variable lock state for 2-phase locking
-    pub var_locks: HashMap<String, VarLock>,
-    /// Most recent transaction to write each variable
-    pub latest_write_txn: HashMap<String, TxnId>,
 }
 
 pub struct Manager {
@@ -49,8 +46,6 @@ impl Manager {
             vars: HashMap::new(),
             defs: HashMap::new(),
             dep,
-            var_locks: HashMap::new(),
-            latest_write_txn: HashMap::new(),
         };
 
         let mut env: Vec<(String, Value)> = vec![];
@@ -61,12 +56,12 @@ impl Manager {
                 Decl::VarDecl { name, val } => {
                     let value = eval(&val, &env, &mut EvalContext { manager: self, service_name: &svc_name }).await?;
                     env.push((name.clone(), value.clone()));
-                    service.vars.insert(name, value);
+                    service.vars.insert(name, VarState::new(value));
                 }
                 Decl::DefDecl { name, val, .. } => {
                     let value = eval(&val, &env, &mut EvalContext { manager: self, service_name: &svc_name }).await?;
                     env.push((name.clone(), value.clone()));
-                    service.vars.insert(name.clone(), value);
+                    service.vars.insert(name.clone(), VarState::new(value));
                     service.defs.insert(name, val);  // store original expr
                 }
                 Decl::TableDecl { .. } => {
@@ -93,15 +88,15 @@ impl Manager {
         if let Some(expr) = def_expr {
             let env: Vec<(String, Value)> = self.services
                 .get(service_name)
-                .map(|s| s.vars.iter().map(|(k, v)| (k.clone(), v.clone())).collect())
+                .map(|s| s.vars.iter().map(|(k, v)| (k.clone(), v.value.clone())).collect())
                 .unwrap_or_default();
             return eval(&expr, &env, &mut EvalContext { manager: self, service_name }).await;
         }
 
         // Otherwise return stored var value
         if let Some(service) = self.services.get(service_name) {
-            if let Some(value) = service.vars.get(ident) {
-                return Ok(value.clone());
+            if let Some(var_state) = service.vars.get(ident) {
+                return Ok(var_state.value.clone());
             }
         }
         Err(EvalError::LookupError(format!("Variable '{}' not found in service '{}'", ident, service_name)))
@@ -110,8 +105,8 @@ impl Manager {
     pub async fn assign(&mut self, service_name: &str, var: &str, value: Value) -> Result<(), EvalError> {
         // update the var
         if let Some(service) = self.services.get_mut(service_name) {
-            if service.vars.contains_key(var) {
-                service.vars.insert(var.to_string(), value);
+            if let Some(var_state) = service.vars.get_mut(var) {
+                var_state.value = value;
             } else {
                 return Err(EvalError::LookupError(format!("Variable '{}' not found in service '{}'", var, service_name)));
             }
@@ -152,13 +147,15 @@ impl Manager {
                 if let Some(expr) = expr {
                     let env: Vec<(String, Value)> = self.services
                         .get(service_name)
-                        .map(|s| s.vars.iter().map(|(k, v)| (k.clone(), v.clone())).collect())
+                        .map(|s| s.vars.iter().map(|(k, v)| (k.clone(), v.value.clone())).collect())
                         .unwrap_or_default();
 
                     let value = eval(&expr, &env, &mut EvalContext { manager: self, service_name }).await?;
 
                     if let Some(service) = self.services.get_mut(service_name) {
-                        service.vars.insert(def_name, value);
+                        if let Some(var_state) = service.vars.get_mut(&def_name) {
+                            var_state.value = value;
+                        }
                     }
                 }
             }
@@ -354,12 +351,13 @@ impl Manager {
     fn acquire_write_lock(&mut self, service_name: &str, var: &str, txn_id: &TxnId) -> Result<(), EvalError> {
         let service = self.services.get_mut(service_name)
             .ok_or_else(|| EvalError::LookupError(format!("Service '{}' not found", service_name)))?;
-        let lock = service.var_locks.entry(var.to_string()).or_insert(VarLock::new());
-        if lock.try_write(txn_id) {
+        let var_state = service.vars.get_mut(var)
+            .ok_or_else(|| EvalError::LookupError(format!("Variable '{}' not found", var)))?;
+        if var_state.lock.try_write(txn_id) {
             Ok(())
         } else {
             Err(EvalError::LockConflict(format!(
-                "Variable '{}' is already locked; cannot acquire write lock for txn {:?}", var, txn_id
+                "Variable '{}' is already locked; cannot acquire write lock", var
             )))
         }
     }
@@ -369,8 +367,9 @@ impl Manager {
     fn acquire_read_lock(&mut self, service_name: &str, var: &str, txn_id: &TxnId) -> Result<(), EvalError> {
         let service = self.services.get_mut(service_name)
             .ok_or_else(|| EvalError::LookupError(format!("Service '{}' not found", service_name)))?;
-        let lock = service.var_locks.entry(var.to_string()).or_insert(VarLock::new());
-        if lock.try_read(txn_id) {
+        let var_state = service.vars.get_mut(var)
+            .ok_or_else(|| EvalError::LookupError(format!("Variable '{}' not found", var)))?;
+        if var_state.lock.try_read(txn_id) {
             Ok(())
         } else {
             Err(EvalError::LockConflict(format!(
@@ -383,8 +382,8 @@ impl Manager {
     fn release_locks(&mut self, service_name: &str, vars: &HashSet<String>, txn_id: &TxnId) {
         if let Some(service) = self.services.get_mut(service_name) {
             for var in vars {
-                if let Some(lock) = service.var_locks.get_mut(var) {
-                    lock.release(txn_id);
+                if let Some(var_state) = service.vars.get_mut(var) {
+                    var_state.lock.release(txn_id);
                 }
             }
         }
@@ -462,7 +461,9 @@ impl Manager {
         if exec_error.is_none() {
             if let Some(service) = self.services.get_mut(service_name) {
                 for var in &write_vars {
-                    service.latest_write_txn.insert(var.clone(), txn_id.clone());
+                    if let Some(var_state) = service.vars.get_mut(var) {
+                        var_state.latest_write_txn = Some(txn_id.clone());
+                    }
                 }
             }
         }

@@ -119,3 +119,25 @@ impl VarLock {
         }
     }
 }
+
+/// Composite state for a single variable, consolidating value, lock, and
+/// transaction history into one structure instead of three separate maps.
+#[derive(Debug, Clone)]
+pub struct VarState {
+    /// Current value of the variable.
+    pub value: crate::runtime::ast::Value,
+    /// Lock state for 2-phase locking.
+    pub lock: VarLock,
+    /// Most recent transaction to write this variable.
+    pub latest_write_txn: Option<TxnId>,
+}
+
+impl VarState {
+    pub fn new(value: crate::runtime::ast::Value) -> Self {
+        VarState {
+            value,
+            lock: VarLock::new(),
+            latest_write_txn: None,
+        }
+    }
+}
