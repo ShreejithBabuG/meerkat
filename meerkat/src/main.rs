@@ -147,7 +147,7 @@ async fn run_server(prog: Vec<Stmt>, remote_url_map: std::collections::HashMap<S
                             }
                         }
                         MeerkatMessage::ActionRequest { request_id, service, stmts, env: action_env, reply_to } => {
-                            let result = manager.run_test_with_env(&service, &stmts, &action_env).await;
+                            let result = manager.execute_action_with_env(&service, &stmts, &action_env).await;
                             let response = MeerkatMessage::ActionResponse {
                                 request_id,
                                 success: result.is_ok(),
@@ -200,7 +200,7 @@ async fn run_client(
                 println!("Service '{}' loaded", name);
             }
             Stmt::Test { service, stmts } => {
-                manager.run_test(service, stmts).await
+                manager.execute_action(service, stmts).await
                     .map_err(|e| format!("Test failed in '{}': {}", service, e))?;
                 println!("@test({}) passed", service);
             }

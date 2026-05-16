@@ -398,7 +398,7 @@ impl Manager {
     ///
     /// Deadlock prevention (wait-die) is deferred to a follow-up issue.
     /// If a lock cannot be acquired, the transaction fails immediately.
-    pub async fn run_test_with_txn(
+    pub async fn execute_action_with_txn(
         &mut self,
         service_name: &str,
         stmts: &[ActionStmt],
@@ -478,12 +478,12 @@ impl Manager {
         }
     }
 
-    pub async fn run_test(&mut self, service_name: &str, stmts: &[ActionStmt]) -> Result<(), EvalError> {
-        self.run_test_with_txn(service_name, stmts, &[]).await
+    pub async fn execute_action(&mut self, service_name: &str, stmts: &[ActionStmt]) -> Result<(), EvalError> {
+        self.execute_action_with_txn(service_name, stmts, &[]).await
     }
 
-    pub async fn run_test_with_env(&mut self, service_name: &str, stmts: &[ActionStmt], initial_env: &[(String, Value)]) -> Result<(), EvalError> {
-        self.run_test_with_txn(service_name, stmts, initial_env).await
+    pub async fn execute_action_with_env(&mut self, service_name: &str, stmts: &[ActionStmt], initial_env: &[(String, Value)]) -> Result<(), EvalError> {
+        self.execute_action_with_txn(service_name, stmts, initial_env).await
     }
 }
 

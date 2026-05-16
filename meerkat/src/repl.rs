@@ -140,7 +140,7 @@ async fn exec_stmt(
             Ok(Some(format!("Service '{}' loaded.", name)))
         }
         Stmt::Test { service, stmts } => {
-            manager.run_test(&service, &stmts).await
+            manager.execute_action(&service, &stmts).await
                 .map_err(|e| format!("@test({}): {}", service, e))?;
             Ok(Some(format!("@test({}) passed.", service)))
         }
